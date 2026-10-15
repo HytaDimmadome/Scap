@@ -132,8 +132,6 @@ def executar(scan, titulo=None, sem_moldura=False, pai=None):
             except Exception:
                 pass
             time.sleep(0.12)
-    if sem_moldura:
-        threading.Thread(target=travar, daemon=True).start()
     try:
         webview.start()
     except Exception as e:
@@ -181,27 +179,74 @@ def achar_janela(titulo):
     return ctypes.windll.user32.FindWindowW(None, titulo) or 0
 
 
-def prender(hwnd, pai_hwnd, w, h):
-    """Transforma a janela do visualizador em filha do quadro do app."""
+def _u():
     import ctypes
     u = ctypes.windll.user32
     u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
     u.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
     u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
     u.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
-    u.SetParent.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    u.MoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+    u.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    u.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    u.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    return u
+
+
+class _Fisico:
+    """Dentro deste bloco a thread mede/posiciona janelas em pixels FÍSICOS (independente da escala 125%/150% do Windows),
+    para que a posição do quadro do app e a da janela do visualizador (outro processo) coincidam."""
+    def __enter__(self):
+        import ctypes
+        self.u, self.ant = ctypes.windll.user32, None
+        try:
+            self.u.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+            self.u.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+            self.ant = self.u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))   # PER_MONITOR_AWARE_V2
+        except Exception:
+            self.ant = None
+        return self
+
+    def __exit__(self, *a):
+        try:
+            if self.ant:
+                self.u.SetThreadDpiAwarenessContext(self.ant)
+        except Exception:
+            pass
+
+
+def retangulo(hwnd):
+    """(x, y, largura, altura) de uma janela/quadro, em pixels físicos de tela."""
+    import ctypes
+    from ctypes import wintypes
+    r = wintypes.RECT()
+    with _Fisico() as f:
+        f.u.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        f.u.GetWindowRect(hwnd, ctypes.byref(r))
+    return r.left, r.top, r.right - r.left, r.bottom - r.top
+
+
+def prender(hwnd, dono_hwnd):
+    """Deixa a janela do visualizador sem moldura, 'pertencendo' à janela do app (fica sempre por cima dela,
+    some junto ao minimizar e não aparece na barra de tarefas). Ela NÃO vira janela filha: assim o WebView2
+    desenha direito ao arrastar. A posição é seguida pelo app com ajustar()."""
+    u = _u()
     estilo = u.GetWindowLongPtrW(hwnd, -16)
-    estilo &= ~(0x00C00000 | 0x00040000 | 0x80000000 | 0x00080000 | 0x00020000 | 0x00010000)
-    estilo |= 0x40000000 | 0x10000000
+    estilo &= ~(0x00C00000 | 0x00040000 | 0x00080000 | 0x00020000 | 0x00010000 | 0x40000000)
+    estilo |= 0x80000000                                  # WS_POPUP
     u.SetWindowLongPtrW(hwnd, -16, estilo)
-    u.SetParent(hwnd, pai_hwnd)
-    u.MoveWindow(hwnd, 0, 0, int(w), int(h), True)
+    ex = u.GetWindowLongPtrW(hwnd, -20)
+    ex = (ex | 0x00000080) & ~0x00040000                  # TOOLWINDOW, sem APPWINDOW
+    u.SetWindowLongPtrW(hwnd, -20, ex)
+    u.SetWindowLongPtrW(hwnd, -8, dono_hwnd)              # GWLP_HWNDPARENT = dono
+    u.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)   # aplica o novo estilo
     return True
 
 
-def ajustar(hwnd, w, h):
-    import ctypes
-    u = ctypes.windll.user32
-    u.MoveWindow.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
-    u.MoveWindow(hwnd, 0, 0, int(w), int(h), True)
+def ajustar(hwnd, x, y, w, h, visivel=True):
+    u = _u()
+    if not visivel:
+        u.ShowWindow(hwnd, 0)
+        return
+    # SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_NOZORDER
+    with _Fisico():
+        u.SetWindowPos(hwnd, None, int(x), int(y), max(1, int(w)), max(1, int(h)), 0x0010 | 0x0200 | 0x0040 | 0x0004)
