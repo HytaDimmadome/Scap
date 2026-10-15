@@ -25,7 +25,7 @@ from mapscan_ui import (VERDE, VERDE_HOV, CREME, CREME_CLARO, CREME_ESC, BORDA, 
                         AVISO, Btn, IconBtn, Check, Painel, Campo, Dropdown, NavItem, BarraProgresso, ListaRolavel,
                         rr_img, tk_icone, fonte)
 
-VERSAO = "1.0.0"
+VERSAO = "1.0.0 (build 15/10 20h40 - escala DPI)"
 NOME = "Scap"
 
 # ---------------------------------------------------------------- configuração
@@ -476,6 +476,7 @@ class App(tk.Tk):
         self._scan3d = None
         self._proc3d = None
         self._hwnd3d = 0
+        self._ult_ret3d = None
         self._overlay = None
         self.ico_mods = {}
         self.splash = Splash(self)
@@ -1455,42 +1456,47 @@ class App(tk.Tk):
         if hwnd:
             try:
                 self.update_idletasks()
-                mv.prender(hwnd, self.v3d.winfo_id(), self.v3d.winfo_width(), self.v3d.winfo_height())
+                dono = ctypes_user32().GetParent(self.winfo_id()) or self.winfo_id()
+                mv.prender(hwnd, dono)
                 self._hwnd3d = hwnd
+                self._ult_ret3d = None
                 self.lbl3d.place_forget()
                 self._vigiar_3d()
                 return
             except Exception:
-                pass
+                self._log_erro()
         self._tent3d += 1
         if self._tent3d > 70:
-            # não deu para embutir: abre em janela própria
+            # não deu para encaixar: abre em janela própria
             self._parar_3d()
             self._proc3d = mv.abrir(scan)
             self.lbl3d.config(text="O 3D abriu em uma janela separada.")
-            self.toast("Não consegui embutir o 3D; abri em janela própria.")
+            self.toast("Não consegui encaixar o 3D; abri em janela própria.")
             return
         self.after(400, lambda: self._prender_3d(scan))
 
     def _vigiar_3d(self):
-        """Reafirma posição/tamanho da janela embutida (ela podia deslocar ao clicar nos controles)."""
+        """A janela do visualizador acompanha o quadro da aba 3D (posição, tamanho e visibilidade)."""
         if not self._hwnd3d or self._proc3d is None:
             return
         try:
-            if self.pagina == "3d":
-                import mapscan_viewer as mv
-                mv.ajustar(self._hwnd3d, self.v3d.winfo_width(), self.v3d.winfo_height())
+            import mapscan_viewer as mv
+            vis = (self.pagina == "3d" and self.state() != "iconic" and self.v3d.winfo_viewable()
+                   and self.v3d.winfo_width() > 20)
+            ret = mv.retangulo(self.v3d.winfo_id()) if vis else None
+            chave = (ret, vis)
+            if chave != self._ult_ret3d:
+                self._ult_ret3d = chave
+                if vis:
+                    mv.ajustar(self._hwnd3d, ret[0], ret[1], ret[2], ret[3], True)
+                else:
+                    mv.ajustar(self._hwnd3d, 0, 0, 1, 1, False)
         except Exception:
             pass
-        self.after(400, self._vigiar_3d)
+        self.after(30, self._vigiar_3d)
 
     def _ajustar_3d(self, e):
-        if self._hwnd3d:
-            try:
-                import mapscan_viewer as mv
-                mv.ajustar(self._hwnd3d, e.width, e.height)
-            except Exception:
-                pass
+        pass
 
     # ---------- avisos discretos
     def toast(self, texto, ms=4500):
@@ -1881,6 +1887,11 @@ VERM_HOV = ui.VERM_HOV
 
 
 # ---------------------------------------------------------------- tela de abertura
+def ctypes_user32():
+    import ctypes
+    return ctypes.windll.user32
+
+
 class Splash(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app)
