@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Scap: tema e widgets (tkinter + Pillow). Tudo é desenhado em Canvas com cantos arredondados suaves."""
 import os
 import sys
 import tkinter as tk
@@ -7,7 +5,6 @@ from tkinter import font as tkfont
 
 from PIL import Image, ImageDraw, ImageTk
 
-# ---------------------------------------------------------------- tema
 VERDE = "#0B4B33"
 VERDE_HOV = "#0F5C3E"
 VERDE_ESC = "#073A27"
@@ -44,15 +41,14 @@ FONTE = "Inter"
 
 
 def _carregar_inter():
-    """Registra a fonte Inter embutida (só para este programa)."""
     pasta = os.path.join(base_dir(), "gui_assets", "fonts")
-    arqs = [os.path.join(pasta, n) for n in ("Inter-Regular.ttf", "Inter-Bold.ttf")]  # SemiBold/ExtraBold só são lidas direto pelo PIL
+    arqs = [os.path.join(pasta, n) for n in ("Inter-Regular.ttf", "Inter-Bold.ttf")]
     if os.name == "nt":
         try:
             import ctypes
             for a in arqs:
                 ctypes.windll.gdi32.AddFontResourceExW(a, 0x10, 0)
-        except Exception:
+        except (OSError, AttributeError):
             pass
     else:
         try:
@@ -68,12 +64,11 @@ def _carregar_inter():
             if novo:
                 import subprocess
                 subprocess.run(["fc-cache", "-f", dest], timeout=30)
-        except Exception:
+        except OSError:
             pass
 
 
 def escolher_fonte(root=None):
-    global FONTE
     return FONTE
 
 
@@ -81,7 +76,6 @@ def fonte(tam=10, peso="normal"):
     return (FONTE, tam, peso)
 
 
-# ---------------------------------------------------------------- imagens
 _cache = {}
 
 
@@ -89,7 +83,6 @@ _cantos_cache = {}
 
 
 def _canto(r):
-    """Máscara (L) do canto superior esquerdo arredondado: 255 dentro da curva."""
     m = _cantos_cache.get(r)
     if m is None:
         S = 4
@@ -114,7 +107,6 @@ def _mascara(w, h, r):
 
 
 def rr_pil(w, h, r, fill, outline=None, ow=2):
-    """Retângulo arredondado suave, rápido mesmo em tamanhos grandes (só os cantos são suavizados)."""
     w, h = max(int(w), 2), max(int(h), 2)
     cor = rgb(outline if outline else fill)
     img = Image.new("RGBA", (w, h), cor + (255,))
@@ -139,20 +131,19 @@ def rr_img(w, h, r, fill, outline=None, ow=2):
 
 
 def _icone_arquivo(nome, px, cor):
-    """Se existir gui_assets/icones/<nome>.png, usa o canal alfa dele como máscara e pinta com a cor pedida."""
     arq = os.path.join(base_dir(), "gui_assets", "icones", nome + ".png")
     if not os.path.isfile(arq):
         return None
     try:
         im = Image.open(arq).convert("RGBA")
         alfa = im.getchannel("A")
-        if alfa.getextrema()[0] == 255:  # sem transparência: usa o brilho invertido (preto = traço)
+        if alfa.getextrema()[0] == 255:
             alfa = Image.eval(im.convert("L"), lambda v: 255 - v)
         alfa = alfa.resize((px, px), Image.LANCZOS)
         out = Image.new("RGBA", (px, px), rgb(cor) + (0,))
         out.putalpha(alfa)
         return out
-    except Exception:
+    except OSError:
         return None
 
 
@@ -162,15 +153,13 @@ def fonte_pil(arquivo, px):
 
 
 def marca_img(largura, cor="#FFF5DB", autor=True, cor_autor=None, contorno=None):
-    """Logotipo 'Scap' em letra script (Damion, exceção à regra da Inter) com sombra deslocada e
-    rabisco sublinhado; 'by Essie N Pierot' (Inter SemiBold) fica abaixo, sem encostar."""
     S = 3
     f = fonte_pil("Damion-Regular.ttf", 240 * S)
     t = "Scap"
     bb = f.getbbox(t)
     w = bb[2] - bb[0]
     pad = 26 * S
-    off = 7 * S                                   # sombra deslocada
+    off = 7 * S
     sub = 44 * S if autor else 0
     gap = 26 * S if autor else 0
     h = (bb[3] - bb[1]) + pad * 2 + sub + gap + 30 * S
@@ -181,7 +170,6 @@ def marca_img(largura, cor="#FFF5DB", autor=True, cor_autor=None, contorno=None)
     ct = max(2, int(5 * S))
     d.text((x0 + off, y0 + off), t, font=f, fill=rgb(sombra) + (255,), stroke_width=ct, stroke_fill=rgb(sombra) + (255,))
     d.text((x0, y0), t, font=f, fill=rgb(cor) + (255,), stroke_width=ct // 2, stroke_fill=rgb(cor) + (255,))
-    # rabisco curvo sublinhando a palavra (assinatura de logotipo)
     base = pad + (bb[3] - bb[1]) + 12 * S
     pts = []
     import math
@@ -205,7 +193,6 @@ def marca_img(largura, cor="#FFF5DB", autor=True, cor_autor=None, contorno=None)
 
 
 def pil_icone(nome, px, cor=VERDE):
-    """Ícone vetorial simples desenhado em máscara e colorido."""
     arq = _icone_arquivo(nome, px, cor)
     if arq is not None:
         return arq
@@ -330,19 +317,17 @@ def tk_icone(nome, px, cor=VERDE):
 
 
 def tk_pil(img, nome=None):
-    """PhotoImage de uma imagem PIL com a referência guardada no cache."""
     t = ImageTk.PhotoImage(img)
     _cache[("pil", id(t))] = t
     return t
 
 
 def _deb(w, fn, *args, ms=70):
-    """Agenda fn(*args) só depois que o tamanho parar de mudar (evita travar ao redimensionar/maximizar)."""
     ant = getattr(w, "_deb_id", None)
     if ant is not None:
         try:
             w.after_cancel(ant)
-        except Exception:
+        except (tk.TclError, ValueError):
             pass
     def _run():
         w._deb_id = None
@@ -353,7 +338,6 @@ def _deb(w, fn, *args, ms=70):
     w._deb_id = w.after(ms, _run)
 
 
-# ---------------------------------------------------------------- widgets
 class Btn(tk.Canvas):
     ESTILOS = {
         "primario": dict(bg=VERDE, hov=VERDE_HOV, fg=CREME, borda=None),
@@ -418,7 +402,6 @@ class Btn(tk.Canvas):
 
 
 class IconBtn(tk.Canvas):
-    """Botão quadrado só com ícone (zoom do mapa, controles da janela)."""
 
     def __init__(self, master, icone, comando, tam=34, px=18, bg=CREME_CLARO, hov=CREME_ESC, cor=VERDE, raio=8,
                  cor_hov=None, hov_icone=None):
@@ -475,7 +458,6 @@ class Check(tk.Canvas):
 
 
 class Painel(tk.Canvas):
-    """Cartão com cantos arredondados; os filhos vão em .inner. A altura segue o conteúdo."""
 
     def __init__(self, master, bg=CREME, fundo=CREME_CLARO, borda=BORDA, raio=14, pad=14, expandir=False):
         super().__init__(master, bg=bg, highlightthickness=0, bd=0, height=40)
@@ -509,7 +491,6 @@ class Painel(tk.Canvas):
 
 
 class Campo(tk.Canvas):
-    """Campo de texto com borda arredondada. estado: None, 'ok', 'erro'."""
 
     def __init__(self, master, variavel=None, bg=CREME_CLARO, h=38, somente_leitura=False, largura=None, tam=10,
                  fundo="#FBF0DC", justificar="left"):
@@ -663,7 +644,6 @@ class BarraProgresso(tk.Canvas):
 
 
 class ListaRolavel(tk.Frame):
-    """Lista com rolagem e barra fina desenhada à mão."""
 
     def __init__(self, master, bg=CREME_CLARO):
         super().__init__(master, bg=bg)

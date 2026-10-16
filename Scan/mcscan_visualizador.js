@@ -1,30 +1,16 @@
-/*
- * mcscan_visualizador.js — desenha um .scap em WebGL2, em câmera isométrica (45°).
- * Precisa de mcscan_leitor.js carregado antes.
- *
- *   const scan = await McScan.carregar("cidade.scap");
- *   const vista = await McScanView.criar(document.getElementById("mapa"), scan);
- *   vista.girar(1);    // próximo canto (a câmera continua isométrica)
- *   vista.recentrar(); // volta ao enquadramento inicial
- *
- * Funciona com cidades grandes: de longe mostra pilares em baixa resolução (LOD) e, ao aproximar,
- * constrói só os blocos que aparecem na tela (com as texturas), descartando o que fica escondido.
- *
- * Controles: arrastar = mover, roda do mouse = zoom, dois dedos = zoom no celular.
- */
 (function (raiz) {
   "use strict";
 
   var BIAS = McScan.BIAS;
-  var LIMITE_QUADS = 2500000;      // quantas faces ficam na memória da placa de vídeo ao mesmo tempo
-  var ZOOM_DETALHE = 2;            // pixels por bloco a partir dos quais desenha os blocos de verdade
-  var ZOOM_MEDIO = 0.6;            // abaixo disso usa o LOD mais grosso
+  var LIMITE_QUADS = 2500000;
+  var ZOOM_DETALHE = 2;
+  var ZOOM_MEDIO = 0.6;
 
   var VS = "#version 300 es\n" +
     "in vec4 aPos; in vec2 aUv; in vec4 aCol;\n" +
     "uniform vec3 uC, uR, uU, uF, uOrigin; uniform vec2 uPan, uScale; uniform float uDepth, uTempo, uVento;\n" +
-    "out vec2 vUv; out vec4 vCol; out float vZ; flat out int vTx;\n" +
-    "void main(){ float fv = step(32768.0, aPos.w); float fl = fv * step(0.99, aCol.a);\n" +
+    "out vec2 vUv; out vec4 vCol; out float vZ; out float vSn; out float vPd; out vec3 vW; flat out int vTx;\n" +
+    "void main(){ float fv = step(32768.0, aPos.w); float fl = fv * step(0.95, aCol.a);\n" +
     "  float ampl = fv * (1.0 - fl) * aCol.a * 0.16 * uVento;\n" +
     "  vec3 wp = uOrigin + (aPos.xyz - " + BIAS + ".0) / " + McScan.SUB + ".0;\n" +
     "  float t = uTempo * 0.05;\n" +
@@ -33,10 +19,10 @@
     "  float zz = dot(d,uF)*uDepth;\n" +
     "  gl_Position = vec4((dot(d,uR)-uPan.x)*uScale.x, (dot(d,uU)-uPan.y)*uScale.y, zz, 1.0);\n" +
     "  float br = 1.0 + fl * uVento * 0.11 * sin(t*1.25 + wp.x*0.55 + wp.z*0.45 + wp.y*0.8);\n" +
-    "  vUv = aUv; vCol = vec4(aCol.rgb * br, mix(aCol.a, 1.0, fv)); vZ = zz; vTx = int(aPos.w - 32768.0*fv + 0.5); }\n";
+    "  vUv = aUv; vCol = vec4(aCol.rgb * br, mix(aCol.a, 1.0, fv)); float a8 = aCol.a * 255.0; vSn = (1.0 - fv + fl) * step(abs(a8 - 244.0), 1.5); vPd = (1.0 - fv) * step(abs(a8 - 238.0), 1.5); vW = wp; vZ = zz; vTx = int(aPos.w - 32768.0*fv + 0.5); }\n";
   var FS = "#version 300 es\n" +
     "precision highp float;\n" +
-    "in vec2 vUv; in vec4 vCol; in float vZ; flat in int vTx; uniform sampler2D uTex; uniform sampler2D uRect; uniform float uCorte; uniform float uSolido; uniform vec3 uTonSolido; uniform sampler2D uAnim; uniform sampler2D uSteps; uniform float uAnimOn; uniform float uTempo; uniform float uNeblina; uniform vec3 uCorNeblina; out vec4 o;\n" +
+    "in vec2 vUv; in vec4 vCol; in float vZ; in float vSn; in float vPd; in vec3 vW; flat in int vTx; uniform float uCinza, uPoca; uniform sampler2D uTex; uniform sampler2D uRect; uniform float uCorte; uniform float uSolido; uniform vec3 uTonSolido; uniform sampler2D uAnim; uniform sampler2D uSteps; uniform float uAnimOn; uniform float uTempo; uniform float uNeblina; uniform vec3 uCorNeblina; out vec4 o;\n" +
     "vec4 amostra(){\n" +
     "  vec2 ts = vec2(textureSize(uTex, 0)); vec2 px = vUv * ts;\n" +
     "  vec2 dx = dFdx(px), dy = dFdy(px);\n" +
@@ -49,14 +35,31 @@
     "      vec2 fo = texelFetch(uSteps, ivec2(k & 2047, k >> 11), 0).xy; px += fo - r.xy; r.xy = fo; } }\n" +
     "  px = clamp(px, r.xy + mt, r.xy + r.zw - mt);\n" +
     "  return textureGrad(uTex, px / ts, dFdx(vUv), dFdy(vUv)); }\n" +
-    "vec3 nevoa(vec3 c){ float fz = clamp(vZ * 0.5 + 0.5, 0.0, 1.0); float f = uNeblina * pow(smoothstep(0.32, 1.0, fz), 1.4); return mix(c, uCorNeblina, f); }\n" +
+    "float hs(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }\n" +
+    "float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);\n" +
+    "  return mix(mix(hs(i), hs(i + vec2(1.0, 0.0)), f.x), mix(hs(i + vec2(0.0, 1.0)), hs(i + vec2(1.0, 1.0)), f.x), f.y); }\n" +
+    "vec3 poca(vec3 c){\n" +
+    "  float n = vn(vW.xz * 0.55) * 0.62 + vn(vW.xz * 1.7 + 9.0) * 0.38;\n" +
+    "  float m = smoothstep(0.50, 0.58, n) * uPoca;\n" +
+    "  vec2 g = vW.xz * 3.2; vec2 ce = floor(g); float ph = fract(uTempo * 0.018 + hs(ce) * 3.7); vec2 cc = ce + 0.25 + 0.5 * vec2(hs(ce + 3.1), hs(ce + 7.7));\n" +
+    "  float rd = length(g - cc); float anel = smoothstep(0.07, 0.0, abs(rd - ph * 0.62)) * (1.0 - ph) * m;\n" +
+    "  vec3 molhado = c * (1.0 - 0.16 * uPoca);\n" +
+    "  vec3 agua = mix(c * 0.42, uCorNeblina * vec3(0.92, 1.0, 1.12), 0.46) + vec3(0.10) * anel;\n" +
+    "  return mix(molhado, agua, m); }\n" +
+    "vec3 nevoa(vec3 c){ c = mix(c, vec3(dot(c, vec3(0.30, 0.59, 0.11))) * 0.88, uCinza); float fz = clamp(vZ * 0.5 + 0.5, 0.0, 1.0); float f = uNeblina * pow(smoothstep(0.32, 1.0, fz), 1.4); return mix(c, uCorNeblina, f); }\n" +
     "void main(){\n" +
     "  if (uSolido > 0.5) { o = vec4(nevoa(vCol.rgb * uTonSolido), 1.0); return; }\n" +
     "  vec4 t = amostra();\n" +
-    "  if (uCorte > 0.0) { if (t.a < uCorte) discard; o = vec4(nevoa(t.rgb * vCol.rgb), 1.0); }\n" +
+    "  if (uSolido < 0.5 && vCol.a > 0.97 && vCol.a < 0.995) {\n" +
+    "    float q = smoothstep(0.55, 1.0, t.a); vec3 g = vCol.rgb * 0.19 * mix(1.0, 0.35, q);\n" +
+    "    if (t.a > 0.25 && t.a < 0.9) g *= mix(vec3(1.0), t.rgb * 1.3, 0.5);\n" +
+    "    o = vec4(nevoa(g), 1.0); return; }\n" +
+    "  if (uCorte > 0.0) { if (t.a < uCorte) discard; vec3 c = t.rgb * vCol.rgb;\n" +
+    "    if (vSn > 0.01) { float lu = dot(t.rgb, vec3(0.33)); vec3 lz = mix(vCol.rgb, vec3(dot(vCol.rgb, vec3(0.33))) * vec3(0.96, 1.0, 1.06), 0.6); c = mix(c, vec3(0.94, 0.97, 1.0) * (0.86 + 0.30 * lu) * lz, vSn * 0.93); }\n" +
+    "    if (vPd > 0.5) c = poca(c);\n" +
+    "    o = vec4(nevoa(c), 1.0); }\n" +
     "  else { if (t.a < 0.02) discard; o = vec4(nevoa(t.rgb * vCol.rgb), t.a * vCol.a); } }\n";
 
-  /* pós-processamento: céu em degradê, brilho (bloom) e composição */
   var VS_TELA = "#version 300 es\nout vec2 vP;\nvoid main(){ vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); vP = p; gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }\n";
   var FS_CEU = "#version 300 es\nprecision highp float;\nin vec2 vP; uniform vec3 uTopo, uHorizonte; out vec4 o;\n" +
     "void main(){ float k = pow(clamp(vP.y, 0.0, 1.0), 0.8); o = vec4(mix(uHorizonte, uTopo, k), 1.0); }\n";
@@ -72,6 +75,26 @@
     "  o = vec4(c, 1.0); }\n";
   var FS_JUNTA = "#version 300 es\nprecision highp float;\nin vec2 vP; uniform sampler2D uCena, uBrilho; uniform float uForca; out vec4 o;\n" +
     "void main(){ o = vec4(texture(uCena, vP).rgb + texture(uBrilho, vP).rgb * uForca, 1.0); }\n";
+
+  var VS_TEMPO = "#version 300 es\nprecision highp float;\nuniform float uT, uEsc, uModo; uniform vec2 uPx; out vec2 vL; out float vA;\n" +
+    "float h(float n){ return fract(sin(n * 12.9898) * 43758.5453); }\n" +
+    "void main(){ int id = gl_VertexID / 6; int k = gl_VertexID - id * 6; float fi = float(id);\n" +
+    "  vec2 cq = vec2((k == 1 || k == 2 || k == 4) ? 1.0 : 0.0, (k == 2 || k == 4 || k == 5) ? 1.0 : 0.0); vL = cq;\n" +
+    "  float d = h(fi * 1.31), ph; vec2 c, p;\n" +
+    "  if (uModo < 0.5) {\n" +
+    "    ph = fract(h(fi * 2.7) + uT * (0.50 + 0.55 * d)); float y = 1.15 - ph * 2.3, x = h(fi * 5.1) * 2.5 - 1.25 + ph * 0.23;\n" +
+    "    vec2 dir = normalize(vec2(0.20 * uPx.y, -1.0 * uPx.x)); vec2 dpx = normalize(vec2(0.20, -1.0));\n" +
+    "    float len = (10.0 + 20.0 * d) * uEsc, w = (1.1 + 0.6 * d) * uEsc; vec2 pe = vec2(-dpx.y, dpx.x);\n" +
+    "    p = vec2(x, y) + (-dpx * len * cq.y + pe * w * (cq.x - 0.5)) * uPx; vA = 0.16 + 0.30 * d; }\n" +
+    "  else {\n" +
+    "    ph = fract(h(fi * 2.7) + uT * (0.045 + 0.06 * d)); float y = 1.08 - ph * 2.16;\n" +
+    "    float x = h(fi * 5.1) * 2.5 - 1.25 + 0.05 * sin(uT * (0.7 + d) + fi) + ph * 0.10;\n" +
+    "    float sz = (2.0 + 4.2 * d) * uEsc; p = vec2(x, y) + (cq - 0.5) * sz * uPx; vA = 0.45 + 0.45 * d; }\n" +
+    "  gl_Position = vec4(p, 0.0, 1.0); }\n";
+  var FS_TEMPO = "#version 300 es\nprecision highp float;\nin vec2 vL; in float vA; uniform float uModo; uniform vec3 uCor; out vec4 o;\n" +
+    "void main(){ float a = vA;\n" +
+    "  if (uModo < 0.5) a *= 0.25 + 0.75 * vL.y; else a *= smoothstep(1.0, 0.55, length(vL - 0.5) * 2.0);\n" +
+    "  o = vec4(uCor, a); }\n";
 
   function compilar(gl, tipo, fonte) {
     var s = gl.createShader(tipo);
@@ -94,10 +117,9 @@
     gl.linkProgram(prog);
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("Programa: " + gl.getProgramInfoLog(prog));
     var loc = {};
-    ["uC", "uR", "uU", "uF", "uOrigin", "uPan", "uScale", "uDepth", "uTex", "uRect", "uCorte", "uSolido", "uTonSolido", "uAnim", "uSteps", "uAnimOn", "uTempo", "uVento", "uNeblina", "uCorNeblina"].forEach(function (n) { loc[n] = gl.getUniformLocation(prog, n); });
+    ["uC", "uR", "uU", "uF", "uOrigin", "uPan", "uScale", "uDepth", "uTex", "uRect", "uCorte", "uSolido", "uTonSolido", "uAnim", "uSteps", "uAnimOn", "uTempo", "uVento", "uNeblina", "uCorNeblina", "uCinza", "uPoca"].forEach(function (n) { loc[n] = gl.getUniformLocation(prog, n); });
     var aPos = gl.getAttribLocation(prog, "aPos"), aUv = gl.getAttribLocation(prog, "aUv"), aCol = gl.getAttribLocation(prog, "aCol");
 
-    // programas de tela cheia (céu, brilho e composição)
     function criarTela(fonte, nomes) {
       var pg = gl.createProgram();
       gl.attachShader(pg, compilar(gl, gl.VERTEX_SHADER, VS_TELA));
@@ -114,7 +136,18 @@
       pBorra = criarTela(FS_BORRA, ["uImg", "uDir"]);
       pJunta = criarTela(FS_JUNTA, ["uCena", "uBrilho", "uForca"]);
     } catch (e) { console.error(e); pCeu = pBrilho = pBorra = pJunta = null; }
-    var fb = { cena: null, w: 0, h: 0, brilho: [null, null] };    // alvos de desenho do brilho
+    var pTempo = null;
+    try {
+      pTempo = (function () {
+        var pg = gl.createProgram();
+        gl.attachShader(pg, compilar(gl, gl.VERTEX_SHADER, VS_TEMPO)); gl.attachShader(pg, compilar(gl, gl.FRAGMENT_SHADER, FS_TEMPO));
+        gl.linkProgram(pg);
+        if (!gl.getProgramParameter(pg, gl.LINK_STATUS)) throw new Error("Programa: " + gl.getProgramInfoLog(pg));
+        var u = {}; ["uT", "uEsc", "uModo", "uPx", "uCor"].forEach(function (n) { u[n] = gl.getUniformLocation(pg, n); });
+        return { pg: pg, u: u };
+      })();
+    } catch (e) { console.error(e); pTempo = null; }
+    var fb = { cena: null, w: 0, h: 0, brilho: [null, null] };
     function alvo(w, h, profundidade) {
       var t = gl.createTexture(), f = gl.createFramebuffer();
       gl.bindTexture(gl.TEXTURE_2D, t);
@@ -145,7 +178,6 @@
       return fb.cena.ok && fb.brilho[0].ok && fb.brilho[1].ok;
     }
 
-    // textura (atlas) e cores médias para o LOD
     var bmp; try { bmp = await createImageBitmap(new Blob([scan.atlasPng], { type: "image/png" }),
       { premultiplyAlpha: "none", colorSpaceConversion: "none" }); }
     catch (e) { throw new Error(((e && e.message) || e) + " [etapa: atlas de texturas]"); }
@@ -155,13 +187,12 @@
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bmp);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    var niv = 4;   // retângulos alinhados em 16 px: até o nível 4 (1 px por 16) não mistura texturas vizinhas
+    var niv = 4;
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, niv);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    // retângulo (x, y, w, h em pixels) de cada textura do atlas: o shader prende a amostra ao interior dela
     var texR = gl.createTexture();
     (function () {
       var nT = cab.atlas.rects ? cab.atlas.rects.length : (cab.atlas.n || cab.atlas.colunas * cab.atlas.linhas);
@@ -175,7 +206,6 @@
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, tex);
     })();
-    // texturas animadas: tabela por textura (início, passos, ticks por passo) + lista de quadros (x, y no atlas)
     var texA = gl.createTexture(), texS = gl.createTexture(), temAnim = false;
     (function () {
       var an = cab.atlas.anim;
@@ -208,17 +238,24 @@
     var estado = {
       camera: opc.camera | 0, zoom: 1, panX: 0, panY: 0, base: null, modo: 2,
       animar: temAnim && opc.animar !== false, fundo: opc.fundo || [0.53, 0.72, 0.93], semOclusao: !!opc.semOclusao,
-      noite: 0, vento: opc.vento !== false, neblina: opc.neblina !== false, ceu: opc.ceu !== false, brilho: opc.brilho !== false
+      noite: 0, tempo: "", termo: -1, vento: opc.vento !== false, neblina: opc.neblina !== false, ceu: opc.ceu !== false, brilho: opc.brilho !== false
     };
-    var CEU = { nascer: { topo: [0.40, 0.52, 0.86], hor: [1.0, 0.82, 0.74] }, poente: { topo: [0.30, 0.36, 0.72], hor: [0.99, 0.72, 0.52] }, dia: { topo: [0.33, 0.48, 0.87], hor: [0.96, 0.80, 0.66] }, noite: { topo: [0.012, 0.022, 0.07], hor: [0.07, 0.10, 0.20] } };
-    function corCeu() { return estado.noite ? CEU.noite : (estado.clima === "poente" ? CEU.poente : estado.clima === "nascer" ? CEU.nascer : CEU.dia); }
+    var CEU = { nascer: { topo: [0.40, 0.52, 0.86], hor: [1.0, 0.82, 0.74] }, poente: { topo: [0.30, 0.36, 0.72], hor: [0.99, 0.72, 0.52] }, dia: { topo: [0.22, 0.43, 0.88], hor: [0.80, 0.89, 0.97] }, noite: { topo: [0.012, 0.022, 0.07], hor: [0.07, 0.10, 0.20] } };
+    var CEU_TEMPO = { chuva: { dia: { topo: [0.40, 0.44, 0.50], hor: [0.62, 0.65, 0.69] }, noite: { topo: [0.020, 0.030, 0.060], hor: [0.08, 0.10, 0.14] } },
+                      neve:  { dia: { topo: [0.62, 0.67, 0.74], hor: [0.84, 0.86, 0.89] }, noite: { topo: [0.05, 0.06, 0.10], hor: [0.16, 0.18, 0.24] } } };
+    function corCeu() {
+      var b = estado.noite ? CEU.noite : (estado.clima === "poente" ? CEU.poente : estado.clima === "nascer" ? CEU.nascer : CEU.dia);
+      var tp = CEU_TEMPO[estado.tempo];
+      if (!tp) return b;
+      var alvo = estado.noite ? tp.noite : tp.dia, k = estado.noite ? 0.8 : (estado.clima === "dia" ? 0.8 : 0.6);
+      return { topo: [0, 1, 2].map(function (i) { return b.topo[i] + (alvo.topo[i] - b.topo[i]) * k; }), hor: [0, 1, 2].map(function (i) { return b.hor[i] + (alvo.hor[i] - b.hor[i]) * k; }) };
+    }
     var dpr = 1, quadroN = 0, pendentes = 0;
-    var cache = new Map();            // chave -> {op, tr, quads, uso}
+    var cache = new Map();
     var totalQuads = 0;
     var S = { opaco: new McScan.Saida(), transl: new McScan.Saida() };
     var centro = [Wx / 2, H / 2, Dz / 2];
 
-    // índices compartilhados (o padrão 0,1,2,0,2,3 é o mesmo para todo quad)
     var idxBuf = null, idxCap = 0;
     function indicesPara(nq) {
       if (nq > idxCap) {
@@ -278,7 +315,6 @@
       return m;
     }
 
-    // ---------- câmera ----------
     function projetar(x, y, z) {
       var b = estado.base, dx = x - centro[0], dy = y - centro[1], dz = z - centro[2];
       return [dx * b.r[0] + dy * b.r[1] + dz * b.r[2], dx * b.u[0] + dy * b.u[1] + dz * b.u[2]];
@@ -294,8 +330,13 @@
       return Math.hypot((minX + maxX) / 2 - estado.panX, (minY + maxY) / 2 - estado.panY);
     }
 
+    function alturaUtil() {
+      var m = 0;
+      for (var i = 0; i < scan.topoChunk.length; i++) if (scan.topoChunk[i] > m) m = scan.topoChunk[i];
+      return Math.max(8, Math.min(H, m + 3));
+    }
     function enquadrar() {
-      var b = estado.base, d = [Wx, H, Dz], c = centro;
+      var b = estado.base, d = [Wx, alturaUtil(), Dz], c = centro;
       var minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
       for (var i = 0; i < 8; i++) {
         var p = [(i & 1 ? d[0] : 0) - c[0], (i & 2 ? d[1] : 0) - c[1], (i & 4 ? d[2] : 0) - c[2]];
@@ -311,7 +352,11 @@
     }
 
     function ajustarTamanho() {
-      // supersampling: desenha em resolução maior e o navegador reduz suavemente (bordas sem serrilhado)
+      if (estado.forca) {
+        dpr = estado.forca.w / Math.max(1, canvas.clientWidth);
+        if (canvas.width !== estado.forca.w || canvas.height !== estado.forca.h) { canvas.width = estado.forca.w; canvas.height = estado.forca.h; return true; }
+        return false;
+      }
       var nat = Math.min(window.devicePixelRatio || 1, 2);
       var ss = nat >= 2 ? 1.5 : 2;
       var maxL = Math.max(canvas.clientWidth, canvas.clientHeight) || 1;
@@ -321,7 +366,6 @@
       return false;
     }
 
-    // ---------- quadro ----------
     var pendente = false;
     function pedir() {
       if (pendente) return;
@@ -331,7 +375,6 @@
 
     function escolherModo(z) {
       var m = estado.modo;
-      // mapas pequenos cabem inteiros em detalhe: nunca cai nos LODs grossos
       if (ncx * ncz <= 700) return 0;
       if (z >= ZOOM_DETALHE * (m === 0 ? 0.88 : 1)) return 0;
       if (z >= ZOOM_MEDIO * (m <= 1 ? 0.88 : 1)) return 1;
@@ -370,13 +413,12 @@
       var W = canvas.width, Hh = canvas.height;
       var modo = escolherModo(estado.zoom / dpr);
       estado.modo = modo;
-      var m = 24 / estado.zoom;      // margem de 24 px
+      var m = 24 / estado.zoom;
       var hw = W / (2 * estado.zoom) + m, hh = Hh / (2 * estado.zoom) + m;
       var vp = [estado.panX - hw, estado.panY - hh, estado.panX + hw, estado.panY + hh];
       var itens = itensVisiveis(modo, vp);
       itens.sort(function (a, b) { return a.d - b.d; });
 
-      // constrói o que falta, dentro de um orçamento de tempo
       var t0 = performance.now(), falta = 0;
       for (var k = 0; k < itens.length; k++) {
         var it = itens[k];
@@ -391,7 +433,6 @@
       }
       pendentes = falta;
 
-      // libera as malhas mais antigas se passou do limite
       if (totalQuads > LIMITE_QUADS) {
         var usadas = {};
         itens.forEach(function (it) { usadas[it.chave] = 1; });
@@ -414,7 +455,7 @@
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clearColor(estado.fundo[0], estado.fundo[1], estado.fundo[2], 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      if (estado.ceu && pCeu) {                                  // céu em degradê atrás da cidade
+      if (estado.ceu && pCeu) {
         var cc = corCeu();
         gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.depthMask(false);
         gl.useProgram(pCeu.pg); gl.uniform3fv(pCeu.u.uTopo, cc.topo); gl.uniform3fv(pCeu.u.uHorizonte, cc.hor);
@@ -436,6 +477,8 @@
       gl.uniform1f(loc.uAnimOn, estado.animar ? 1 : 0);
       gl.uniform1f(loc.uTempo, performance.now() / 50);
       gl.uniform1f(loc.uVento, estado.vento ? 1 : 0);
+      gl.uniform1f(loc.uPoca, estado.tempo === "chuva" ? 1 : 0);
+      gl.uniform1f(loc.uCinza, estado.tempo === "chuva" ? (estado.noite ? 0.18 : 0.38) : estado.tempo === "neve" ? (estado.noite ? 0.10 : 0.22) : 0);
       var hz = corCeu().hor;
       gl.uniform1f(loc.uNeblina, estado.neblina ? (estado.noite ? 0.30 : 0.34) : 0);
       gl.uniform3f(loc.uCorNeblina, hz[0], hz[1], hz[2]);
@@ -474,9 +517,24 @@
       gl.depthMask(true); gl.disable(gl.BLEND);
       gl.bindVertexArray(null);
       if (comBrilho) brilhoFinal();
+      if (estado.tempo && pTempo) desenharTempo();
     }
 
-    /* brilho: separa as partes claras, borra em 1/4 da resolução e soma por cima da cena */
+    function desenharTempo() {
+      var chuva = estado.tempo === "chuva", n = chuva ? 1100 : 750;
+      gl.disable(gl.DEPTH_TEST); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false);
+      gl.useProgram(pTempo.pg);
+      gl.uniform1f(pTempo.u.uT, (performance.now() % 600000) / 1000);
+      gl.uniform1f(pTempo.u.uEsc, Math.max(0.6, canvas.height / 800));
+      gl.uniform1f(pTempo.u.uModo, chuva ? 0 : 1);
+      gl.uniform2f(pTempo.u.uPx, 2 / canvas.width, 2 / canvas.height);
+      var c = chuva ? [0.78, 0.86, 1.0] : [0.97, 0.98, 1.0], f = estado.noite ? 0.55 : 1;
+      gl.uniform3f(pTempo.u.uCor, c[0] * f, c[1] * f, c[2] * f);
+      gl.bindVertexArray(vaoTela);
+      gl.drawArrays(gl.TRIANGLES, 0, n * 6);
+      gl.bindVertexArray(null); gl.depthMask(true); gl.disable(gl.BLEND);
+    }
+
     function brilhoFinal() {
       var bw = fb.brilho[0].w, bh = fb.brilho[0].h;
       gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
@@ -497,14 +555,13 @@
       gl.useProgram(pJunta.pg);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, fb.cena.t); gl.uniform1i(pJunta.u.uCena, 0);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, fb.brilho[0].t); gl.uniform1i(pJunta.u.uBrilho, 1);
-      gl.uniform1f(pJunta.u.uForca, 1.6);
+      gl.uniform1f(pJunta.u.uForca, 1.1);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.bindVertexArray(null);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texR);
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
     }
 
-    // ---------- interação ----------
     var ponteiros = new Map(), distAnt = 0;
     function posCanvas(e) {
       var r = canvas.getBoundingClientRect();
@@ -550,9 +607,9 @@
     window.addEventListener("resize", pedir);
 
     var relogio = 0;
-    function ligarRelogio() {                       // 20 quadros por segundo só enquanto há algo animado
+    function ligarRelogio() {
       clearInterval(relogio); relogio = 0;
-      if (estado.animar || estado.vento) relogio = setInterval(function () { if (!document.hidden) pedir(); }, 50);
+      if (estado.animar || estado.vento || estado.tempo) relogio = setInterval(function () { if (!document.hidden) pedir(); }, 50);
     }
     ligarRelogio();
     estado.base = McScan.baseCamera(estado.camera);
@@ -571,27 +628,63 @@
         enquadrar();
         pedir();
       },
-      /* efeitos do visual: {vento, neblina, ceu, brilho} (true/false); sem argumento só devolve o estado */
       estilo: function (c) {
         if (c) { ["vento", "neblina", "ceu", "brilho"].forEach(function (k) { if (c[k] != null) estado[k] = !!c[k]; }); ligarRelogio(); pedir(); }
         return { vento: estado.vento, neblina: estado.neblina, ceu: estado.ceu, brilho: estado.brilho };
       },
+      capturar: async function (o) {
+        var W = Math.max(16, Math.min(8192, Math.round(o.largura))), Hh = Math.max(16, Math.min(8192, Math.round(o.altura)));
+        var salvo = { w: canvas.width, zoom: estado.zoom, panX: estado.panX, panY: estado.panY, zmin: estado.zoomMin, zmax: estado.zoomMax };
+        var c2 = document.createElement("canvas");
+        try {
+          estado.forca = { w: W, h: Hh };
+          ajustarTamanho();
+          if (o.inteiro) enquadrar(); else estado.zoom = salvo.zoom * (W / salvo.w);
+          for (var i = 0; i < 3000; i++) {
+            if (o.cancelado && o.cancelado()) throw new Error("cancelado");
+            quadro();
+            if (pendentes === 0) break;
+            if (i % 4 === 3) await new Promise(function (r) { setTimeout(r, 0); });
+          }
+          quadro();
+          c2.width = W; c2.height = Hh;
+          c2.getContext("2d").drawImage(canvas, 0, 0);
+        } finally {
+          estado.forca = null;
+          ajustarTamanho();
+          estado.zoom = salvo.zoom; estado.panX = salvo.panX; estado.panY = salvo.panY; estado.zoomMin = salvo.zmin; estado.zoomMax = salvo.zmax;
+          pedir();
+        }
+        return c2;
+      },
+      proporcaoMapa: function () {
+        var b = estado.base, d = [Wx, alturaUtil(), Dz], c = centro, minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9;
+        for (var i = 0; i < 8; i++) {
+          var p = [(i & 1 ? d[0] : 0) - c[0], (i & 2 ? d[1] : 0) - c[1], (i & 4 ? d[2] : 0) - c[2]];
+          var x = p[0] * b.r[0] + p[1] * b.r[1] + p[2] * b.r[2], y = p[0] * b.u[0] + p[1] * b.u[1] + p[2] * b.u[2];
+          minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+        }
+        return (maxX - minX) / (maxY - minY);
+      },
       temAnimacao: temAnim,
       animar: function (lig) { estado.animar = temAnim && !!lig; ligarRelogio(); pedir(); return estado.animar; },
-      /* sol e noite: {az (graus, 0 = atrás da câmera, + = esquerda), elev (graus), noite (0/1)} */
       luz: function (cfg) {
         var c = McScan.configLuz(cfg);
-        scan._ctx = {};
-        limparCache();
+        var chave = [c.az, c.elev, c.noite, c.pos, c.termo, c.tempo].join("_");
+        if (chave !== estado.chaveLuz) {
+          estado.chaveLuz = chave; scan._ctx = {};
+          if (scan._rgba) { McScan.calcularCores(scan, scan._rgba); scan._grupos = {}; }
+          limparCache();
+        }
+        estado.tempo = c.tempo; estado.termo = c.termo; ligarRelogio();
         estado.noite = c.noite ? 1 : 0; estado.pos = c.pos; estado.clima = (c.pos === "o" || c.pos === "s") ? "poente" : ((c.pos === "n" || c.pos === "l") ? "nascer" : "dia");
         estado.fundo = c.noite ? [0.025, 0.04, 0.10] : [0.53, 0.72, 0.93];
-        estado.tonSolido = c.noite ? [0.30, 0.37, 0.58] : (estado.clima === "poente" ? [1.10, 0.95, 0.80] : estado.clima === "nascer" ? [1.06, 0.97, 0.90] : [1.08, 0.96, 0.84]);
+        estado.tonSolido = c.noite ? [0.30, 0.37, 0.58] : (estado.clima === "poente" ? [1.10, 0.95, 0.80] : estado.clima === "nascer" ? [1.06, 0.97, 0.90] : [1.06, 1.0, 0.92]);
         pedir();
         return c;
       },
-      /* aproxima/afasta: 1 = zoom máximo de detalhe, valores em pixels por bloco */
       definirZoom: function (pxPorBloco) { estado.zoom = pxPorBloco * dpr; pedir(); },
-      irPara: function (x, z) {                       // centraliza num ponto (coordenadas do mundo)
+      irPara: function (x, z) {
         var p = projetar(x - area.x1, H / 2, z - area.z1);
         estado.panX = p[0]; estado.panY = p[1]; pedir();
       },

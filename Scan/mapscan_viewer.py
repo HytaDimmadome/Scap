@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Visualizador 3D dentro do Scap: janela própria (sem navegador), servindo o scan por um servidor local."""
 import http.server
 import json
 import os
@@ -78,9 +76,6 @@ def _pid_vivo(pid):
 
 
 def _seguir(titulo, dono, arq):
-    """Roda DENTRO do processo do visualizador: mantém a janela exatamente sobre o quadro da aba 3D do app.
-    O app grava (em arquivo) a posição do quadro relativa à área útil da janela dele; aqui convertemos para
-    pixels físicos usando a própria janela do app como referência, então escala/DPI nunca desalinham."""
     import ctypes
     import time
     from ctypes import wintypes
@@ -125,23 +120,81 @@ def _seguir(titulo, dono, arq):
         time.sleep(0.012)
 
 
+class _ApiSalvar:
+
+    def __init__(self, pasta=None):
+        self._f = None
+        self._pasta = pasta
+
+    def ler_recurso(self, nome):
+        import base64
+        nome = str(nome).split("?")[0].lstrip("/")
+        if nome in ARQS:
+            caminho = os.path.join(self._pasta or "", nome)
+        elif nome.startswith("fonts/") and nome.endswith(".ttf") and ".." not in nome:
+            caminho = os.path.join(self._pasta or "", "gui_assets", nome)
+        else:
+            return ""
+        try:
+            with open(caminho, "rb") as f:
+                return base64.b64encode(f.read()).decode("ascii")
+        except OSError:
+            return ""
+
+    def salvar_abrir(self, nome, descricao=""):
+        import webview
+        self.salvar_fechar()
+        pasta = os.path.join(os.path.expanduser("~"), "Pictures")
+        if not os.path.isdir(pasta):
+            pasta = os.path.expanduser("~")
+        try:
+            tipo = getattr(getattr(webview, "FileDialog", None), "SAVE", None) or webview.SAVE_DIALOG
+            ext = os.path.splitext(nome)[1].lstrip(".") or "*"
+            r = webview.windows[0].create_file_dialog(tipo, directory=pasta, save_filename=nome,
+                                                      file_types=("%s (*.%s)" % (descricao or ext.upper(), ext),))
+        except Exception as e:
+            print("diálogo de salvar falhou:", e, file=sys.stderr)
+            return False
+        if not r:
+            return False
+        caminho = r if isinstance(r, str) else r[0]
+        try:
+            self._f = open(caminho, "wb")
+        except OSError:
+            return False
+        return True
+
+    def salvar_pedaco(self, b64):
+        import base64
+        if self._f:
+            self._f.write(base64.b64decode(b64))
+        return True
+
+    def salvar_fechar(self):
+        if self._f:
+            try:
+                self._f.close()
+            finally:
+                self._f = None
+        return True
+
+
 def executar(scan, titulo=None, sem_moldura=False, pai=None):
-    """Roda na janela do visualizador (bloqueia até fechar)."""
     pasta = _pasta_viewer()
     if not pasta or not os.path.isfile(scan):
         print("Visualizador ou scan não encontrado.", file=sys.stderr)
         return 1
     srv, url = _servidor(pasta, scan)
     if os.name == "nt":
-        try:                      # este processo mede em pixels físicos (o app é quem informa a posição relativa)
+        try:
             import ctypes
             ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-        except Exception:
+        except (OSError, AttributeError):
             pass
     try:
         import webview
     except Exception as e:
-        if sem_moldura:            # embutido no app: nunca abre o navegador (o app mostra o aviso)
+        if sem_moldura:
             print("pywebview indisponível:", e, file=sys.stderr)
             return 3
         webbrowser.open(url)
@@ -158,12 +211,13 @@ def executar(scan, titulo=None, sem_moldura=False, pai=None):
             os._exit(0)
         threading.Thread(target=vigia, daemon=True).start()
     webview.create_window(titulo or ("Scap — " + os.path.basename(scan)), url, width=1280, height=800,
-                          min_size=(400, 300), background_color="#0B1F16", frameless=bool(sem_moldura))
+                          min_size=(400, 300), background_color="#0B1F16", frameless=bool(sem_moldura),
+                          js_api=_ApiSalvar(pasta))
     janela = webview.windows[0]
     if sem_moldura and os.environ.get("SCAP_DONO") and os.environ.get("SCAP_POS") and titulo:
         threading.Thread(target=_seguir, args=(titulo, int(os.environ["SCAP_DONO"]), os.environ["SCAP_POS"]), daemon=True).start()
 
-    def travar():                       # impede a página de "andar" dentro da janela embutida (focar um botão rolava o painel)
+    def travar():
         import time
         time.sleep(1.5)
         while True:
@@ -176,7 +230,7 @@ def executar(scan, titulo=None, sem_moldura=False, pai=None):
                         for c in f.Controls:
                             c.Dock = c.Dock.__class__.Fill
                             c.Location = type(c.Location)(0, 0)
-                            try:      # o WebView2 precisa saber que a janela mudou de lugar (senão desenha deslocado ao arrastar)
+                            try:
                                 c.CoreWebView2Controller.NotifyParentWindowPositionChanged()
                             except Exception:
                                 pass
@@ -201,7 +255,6 @@ _SERVIDORES = []
 
 
 def abrir_no_navegador(scan):
-    """Serve o visualizador neste processo e abre no navegador padrão (continua vivo enquanto o app roda)."""
     pasta = _pasta_viewer()
     if not pasta or not os.path.isfile(scan):
         raise RuntimeError("Visualizador ou scan não encontrado.")
@@ -212,7 +265,6 @@ def abrir_no_navegador(scan):
 
 
 def abrir(scan, titulo=None, sem_moldura=False, dono=None, arq_pos=None):
-    """Chamado pelo app principal: abre o visualizador em outro processo (mesmo programa)."""
     import subprocess
     if getattr(sys, "frozen", False):
         cmd = [sys.executable, "--visualizar", scan]
@@ -224,14 +276,13 @@ def abrir(scan, titulo=None, sem_moldura=False, dono=None, arq_pos=None):
         cmd += ["--sem-moldura", "--pai", str(os.getpid())]
     kw = {}
     if os.name == "nt":
-        kw["creationflags"] = 0x08000000  # sem janela de console
+        kw["creationflags"] = 0x08000000
     env = dict(os.environ)
     if dono and arq_pos:
         env["SCAP_DONO"], env["SCAP_POS"] = str(int(dono)), arq_pos
     return subprocess.Popen(cmd, env=env, **kw)
 
 
-# ---- embutir a janela do visualizador dentro do app (Windows) ----
 def achar_janela(titulo):
     if os.name != "nt":
         return 0
@@ -253,15 +304,13 @@ def _u():
 
 
 class _Fisico:
-    """Dentro deste bloco a thread mede/posiciona janelas em pixels FÍSICOS (independente da escala 125%/150% do Windows),
-    para que a posição do quadro do app e a da janela do visualizador (outro processo) coincidam."""
     def __enter__(self):
         import ctypes
         self.u, self.ant = ctypes.windll.user32, None
         try:
             self.u.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
             self.u.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
-            self.ant = self.u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))   # PER_MONITOR_AWARE_V2
+            self.ant = self.u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
         except Exception:
             self.ant = None
         return self
@@ -270,12 +319,11 @@ class _Fisico:
         try:
             if self.ant:
                 self.u.SetThreadDpiAwarenessContext(self.ant)
-        except Exception:
+        except (OSError, AttributeError):
             pass
 
 
 def retangulo(hwnd):
-    """(x, y, largura, altura) de uma janela/quadro, em pixels físicos de tela."""
     import ctypes
     from ctypes import wintypes
     r = wintypes.RECT()
@@ -286,19 +334,16 @@ def retangulo(hwnd):
 
 
 def prender(hwnd, dono_hwnd):
-    """Deixa a janela do visualizador sem moldura, 'pertencendo' à janela do app (fica sempre por cima dela,
-    some junto ao minimizar e não aparece na barra de tarefas). Ela NÃO vira janela filha: assim o WebView2
-    desenha direito ao arrastar. A posição é seguida pelo app com ajustar()."""
     u = _u()
     estilo = u.GetWindowLongPtrW(hwnd, -16)
     estilo &= ~(0x00C00000 | 0x00040000 | 0x00080000 | 0x00020000 | 0x00010000 | 0x40000000)
-    estilo |= 0x80000000                                  # WS_POPUP
+    estilo |= 0x80000000
     u.SetWindowLongPtrW(hwnd, -16, estilo)
     ex = u.GetWindowLongPtrW(hwnd, -20)
-    ex = (ex | 0x00000080) & ~0x00040000                  # TOOLWINDOW, sem APPWINDOW
+    ex = (ex | 0x00000080) & ~0x00040000
     u.SetWindowLongPtrW(hwnd, -20, ex)
-    u.SetWindowLongPtrW(hwnd, -8, dono_hwnd)              # GWLP_HWNDPARENT = dono
-    u.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)   # aplica o novo estilo
+    u.SetWindowLongPtrW(hwnd, -8, dono_hwnd)
+    u.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
     return True
 
 
@@ -307,6 +352,5 @@ def ajustar(hwnd, x, y, w, h, visivel=True):
     if not visivel:
         u.ShowWindow(hwnd, 0)
         return
-    # SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_NOZORDER
     with _Fisico():
         u.SetWindowPos(hwnd, None, int(x), int(y), max(1, int(w)), max(1, int(h)), 0x0010 | 0x0200 | 0x0040 | 0x0004)

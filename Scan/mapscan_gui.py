@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-"""Scap: janela principal (tkinter). Layout: barra lateral verde, páginas Mapa / Configurações / Mods / Sobre."""
 import hashlib
 import io
 import json
@@ -9,26 +7,34 @@ import queue
 import sys
 import threading
 import time
-import webbrowser
 import zipfile
 import tkinter as tk
 from tkinter import filedialog
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageTk, ImageFont
+from PIL import Image, ImageDraw, ImageTk
 
 import mcscan
 import mapscan_ui as ui
+import mapscan_update as upd
 
-sys.setswitchinterval(0.001)   # a interface ganha a vez mais vezes enquanto o scan trabalha
-from mapscan_ui import (VERDE, VERDE_HOV, CREME, CREME_CLARO, CREME_ESC, BORDA, VERMELHO, TEXTO, MUDO, OK, ERRO,
+sys.setswitchinterval(0.001)
+from mapscan_ui import (VERDE, VERDE_HOV, CREME, CREME_CLARO, CREME_ESC, BORDA, TEXTO, MUDO, OK, ERRO,
                         AVISO, Btn, IconBtn, Check, Painel, Campo, Dropdown, NavItem, BarraProgresso, ListaRolavel,
                         rr_img, tk_icone, fonte)
 
-VERSAO = "1.0.0 (build 16/10 00h20 - sol de outono dourado)"
+VERSAO = "1.0.0"
 NOME = "Scap"
+DESCRICAO = ("Escaneia mundos do Minecraft e entrega um mapa isométrico, com sombras, texturas animadas, "
+             "noite e dia. Rápido e pequeno (em KB).")
+RECURSOS = (
+    "Mapa isométrico em 3D",
+    "Simulação de shaders",
+    "Simulação de texturas móveis",
+    "Dia e noite",
+    "Suporte a mods e resource packs",
+)
 
-# ---------------------------------------------------------------- configuração
 def pasta_config():
     if os.name == "nt":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
@@ -40,7 +46,6 @@ def pasta_config():
 
 
 def pasta_minecraft():
-    """Pasta .minecraft padrão do sistema (ou None)."""
     cands = []
     if os.environ.get("APPDATA"):
         cands.append(os.path.join(os.environ["APPDATA"], ".minecraft"))
@@ -53,7 +58,6 @@ def pasta_minecraft():
 
 
 def sub_mc(nome, atual=""):
-    """Pasta inicial para um seletor de arquivos: a última usada, senão .minecraft/<nome>, senão .minecraft."""
     if atual and os.path.isdir(atual):
         return atual
     mc = pasta_minecraft()
@@ -74,7 +78,7 @@ class Config:
         try:
             with open(self.arq, "r", encoding="utf-8") as f:
                 self.d.update(json.load(f))
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     def __getitem__(self, k):
@@ -87,11 +91,10 @@ class Config:
         try:
             with open(self.arq, "w", encoding="utf-8") as f:
                 json.dump(self.d, f, ensure_ascii=False, indent=1)
-        except Exception:
+        except OSError:
             pass
 
 
-# ---------------------------------------------------------------- visão de cima (com cache em disco)
 def chave_visao(pasta):
     h = hashlib.sha1(os.path.abspath(pasta).encode("utf-8"))
     try:
@@ -113,7 +116,7 @@ def carregar_visao_cache(pasta):
         meta = json.loads(str(z["meta"]))
         meta.update({"rgb": z["rgb"], "topo": z["topo"], "topo_max": z["topo_max"], "nome_idx": z["nome_idx"]})
         return meta
-    except Exception:
+    except (OSError, ValueError):
         return None
 
 
@@ -123,16 +126,14 @@ def salvar_visao_cache(pasta, vis):
         meta = {k: vis[k] for k in ("res", "x0", "z0", "w", "h", "nomes")}
         np.savez_compressed(arq, rgb=vis["rgb"], topo=vis["topo"], topo_max=vis["topo_max"],
                             nome_idx=vis["nome_idx"], meta=json.dumps(meta))
-        # mantém só as 12 mais recentes
         arqs = sorted((os.path.join(pasta_config(), f) for f in os.listdir(pasta_config()) if f.startswith("visao_")),
                       key=os.path.getmtime, reverse=True)
         for velho in arqs[12:]:
             os.remove(velho)
-    except Exception:
+    except (OSError, KeyError, ValueError):
         pass
 
 
-# ---------------------------------------------------------------- imagens do app
 def imagem(nome, largura=None, altura=None):
     im = Image.open(ui.asset(nome)).convert("RGBA")
     if largura or altura:
@@ -145,7 +146,6 @@ def imagem(nome, largura=None, altura=None):
 
 
 def cubo_grama(px):
-    """Cubo isométrico de grama (ícone padrão dos mods sem logo)."""
     S = 4
     n = px * S
     im = Image.new("RGBA", (n, n), (0, 0, 0, 0))
@@ -163,14 +163,11 @@ def cubo_grama(px):
 
 
 def arte_vazio(w, h):
-    """Paisagem de blocos bem clara para o fundo da tela vazia."""
     im = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
     cor = (226, 215, 186, 110)
     u = max(10, w // 60)
     base = h - u * 2
-    import random
-    rnd = random.Random(7)
     for cx, larg in ((0.16, 7), (0.84, 8)):
         x0 = int(w * cx)
         for k in range(larg):
@@ -185,7 +182,6 @@ def arte_vazio(w, h):
     return im
 
 
-# ---------------------------------------------------------------- diálogos
 class Dialogo(tk.Toplevel):
     TIPOS = {"erro": ("x", ERRO, "Erro"), "aviso": ("aviso", AVISO, "Atenção"), "ok": ("check", OK, "Concluído"),
              "info": ("info", VERDE, "Informação")}
@@ -239,14 +235,14 @@ class Dialogo(tk.Toplevel):
             self.wait_visibility()
             self.grab_set()
             self.focus_force()
-        except Exception:
+        except tk.TclError:
             pass
 
     def _fim(self, i):
         self.resultado = i
         try:
             self.grab_release()
-        except Exception:
+        except tk.TclError:
             pass
         self.destroy()
 
@@ -257,7 +253,6 @@ class Dialogo(tk.Toplevel):
         return d.resultado
 
 
-# ---------------------------------------------------------------- mapa de cima
 class MapaView(tk.Canvas):
     def __init__(self, master, ao_selecionar, ao_hover):
         super().__init__(master, bg=CREME, highlightthickness=0, bd=0, cursor="crosshair")
@@ -283,7 +278,6 @@ class MapaView(tk.Canvas):
         self.bind("<MouseWheel>", lambda e: self._roda(e.x, e.y, 1.25 if e.delta > 0 else 0.8))
         self.bind("<Button-4>", lambda e: self._roda(e.x, e.y, 1.25))
         self.bind("<Button-5>", lambda e: self._roda(e.x, e.y, 0.8))
-        # controles de zoom (cartão claro no canto)
         self._ctrl = tk.Frame(self, bg=CREME_CLARO, highlightthickness=1, highlightbackground=BORDA)
         for ic, cmd in (("mais", lambda: self._roda(None, None, 1.4)), ("menos", lambda: self._roda(None, None, 1 / 1.4)),
                         ("enquadrar", self.enquadrar)):
@@ -291,7 +285,6 @@ class MapaView(tk.Canvas):
         self._lbl = self.create_text(16, 16, anchor="sw", text="", fill=VERDE, font=fonte(9, "bold"), tags="hover")
         self._lbl_bg = None
 
-    # --- dados
     def definir_visao(self, vis):
         self.vis = vis
         rgb = vis["rgb"].copy()
@@ -322,7 +315,6 @@ class MapaView(tk.Canvas):
             self._pend = True
             self.after(8, self._desenhar)
 
-    # --- conversões
     def f(self):
         return 16.0 / self.vis["res"]
 
@@ -333,7 +325,6 @@ class MapaView(tk.Canvas):
     def para_tela(self, x, z):
         return (self.ox + (x - self.vis["x0"]) / self.f() * self.s, self.oy + (z - self.vis["z0"]) / self.f() * self.s)
 
-    # --- desenho
     def _desenhar(self):
         self._pend = False
         W, H = self.winfo_width(), self.winfo_height()
@@ -380,7 +371,6 @@ class MapaView(tk.Canvas):
         self.tag_raise(self._ctrl_id)
         self.tag_raise("hover")
 
-    # --- interação
     def _ini(self, e):
         if not self.pir:
             return
@@ -446,7 +436,6 @@ class MapaView(tk.Canvas):
             self.tag_raise("hover")
 
 
-# ---------------------------------------------------------------- aplicativo
 ETAPAS_SCAN = ["Iniciando leitura do mundo…", "Escaneando blocos…", "Processando dados…", "Gerando arquivo…"]
 ETAPAS_MAPA = ["Iniciando leitura do mundo…", "Lendo o mapa de cima…", "Montando o mapa…"]
 
@@ -468,8 +457,6 @@ class App(tk.Tk):
         self.pasta_mundo = ""
         self.sel_ativa = None
         self.pagina = None
-        self._maximizado = False
-        self._normal_geo = None
         self._minimizado = False
         self._toast = None
         self._ultimo_scan = None
@@ -488,7 +475,6 @@ class App(tk.Tk):
         self.after(250, self._abrir)
 
     def _preencher_padroes(self):
-        """Na primeira execução, já preenche o jar e a pasta de mods a partir da .minecraft padrão."""
         try:
             mc = pasta_minecraft()
             if not mc:
@@ -516,118 +502,14 @@ class App(tk.Tk):
         self.minsize(1000, 640)
         self.deiconify()
         self.update_idletasks()
-        self._sem_borda()
         self.after(150, self._ler_fila)
         iconpath = ui.asset("emblema.png")
         try:
             self.iconphoto(True, ImageTk.PhotoImage(Image.open(iconpath).resize((64, 64))))
-        except Exception:
+        except (OSError, tk.TclError):
             pass
         self.mostrar("mapa")
 
-    # ---------- janela sem borda
-    def _sem_borda(self):
-        """Tira a barra de título do Windows mantendo a janela 'de verdade' (foco, barra de tarefas, diálogos)."""
-        self._barra_propria = True
-        if os.name == "nt":
-            try:
-                import ctypes
-                self.update_idletasks()
-                u = ctypes.windll.user32
-                u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
-                u.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
-                u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
-                u.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
-                hwnd = u.GetParent(self.winfo_id()) or self.winfo_id()
-                estilo = u.GetWindowLongPtrW(hwnd, -16)
-                estilo &= ~(0x00C00000 | 0x00040000)   # sem barra de título e sem moldura grossa
-                estilo |= 0x00020000 | 0x00010000 | 0x00080000   # botões min, max, menu do sistema
-                u.SetWindowLongPtrW(hwnd, -16, estilo)
-                u.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-                                           ctypes.c_int, ctypes.c_uint]
-                u.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0020 | 0x0010)
-                try:  # cantos arredondados no Windows 11
-                    ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd), 33, ctypes.byref(ctypes.c_int(2)), 4)
-                except Exception:
-                    pass
-                return
-            except Exception:
-                pass
-        try:
-            self.overrideredirect(True)
-        except Exception:
-            self._barra_propria = False
-
-    def minimizar(self):
-        try:
-            self.iconify()
-        except Exception:
-            pass
-
-    def _area_util(self):
-        if os.name == "nt":
-            try:
-                import ctypes
-                from ctypes import wintypes
-                r = wintypes.RECT()
-                ctypes.windll.user32.SystemParametersInfoW(48, 0, ctypes.byref(r), 0)
-                return r.left, r.top, r.right - r.left, r.bottom - r.top
-            except Exception:
-                pass
-        return 0, 0, self.winfo_screenwidth(), self.winfo_screenheight()
-
-    def maximizar(self):
-        if not self._maximizado:
-            self._normal_geo = self.geometry()
-            x, y, w, h = self._area_util()
-            self.geometry("%dx%d+%d+%d" % (w, h, x, y))
-            self._maximizado = True
-            self.btn_max.trocar_icone("restaurar")
-        else:
-            if self._normal_geo:
-                self.geometry(self._normal_geo)
-            self._maximizado = False
-            self.btn_max.trocar_icone("max")
-
-    def _drag_ini(self, e):
-        if self._maximizado:
-            return
-        self._dx, self._dy = e.x_root - self.winfo_x(), e.y_root - self.winfo_y()
-
-    def _drag_mov(self, e):
-        if self._maximizado:
-            return
-        self.geometry("+%d+%d" % (e.x_root - self._dx, e.y_root - self._dy))
-
-    def _redim_ini(self, e, modo):
-        if self._maximizado:
-            return
-        self._rd = (modo, e.x_root, e.y_root, self.winfo_x(), self.winfo_y(), self.winfo_width(), self.winfo_height(), 0.0)
-
-    def _redim_mov(self, e):
-        rd = getattr(self, "_rd", None)
-        if not rd or self._maximizado:
-            return
-        agora = time.time()
-        if agora - rd[7] < 0.04:   # no máximo ~25 atualizações por segundo
-            return
-        modo, mx, my, x, y, w, h, _ = rd
-        dx, dy = e.x_root - mx, e.y_root - my
-        nx, ny, nw, nh = x, y, w, h
-        if "e" in modo:
-            nw = max(1000, w + dx)
-        if "s" in modo:
-            nh = max(640, h + dy)
-        if "w" in modo:
-            nw = max(1000, w - dx)
-            nx = x + (w - nw)
-        if "n" in modo:
-            nh = max(640, h - dy)
-            ny = y + (h - nh)
-        self.geometry("%dx%d+%d+%d" % (nw, nh, nx, ny))
-        self._rd = rd[:7] + (agora,)
-
-    # ---------- montagem
     def _montar(self):
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
@@ -636,9 +518,8 @@ class App(tk.Tk):
         self.principal.grid(row=0, column=1, sticky="nsew")
         self.principal.columnconfigure(0, weight=1)
         self.principal.rowconfigure(1, weight=1)
-        self._montar_topo()
         self.area = tk.Frame(self.principal, bg=CREME)
-        self.area.grid(row=1, column=0, sticky="nsew", padx=(22, 22), pady=(0, 20))
+        self.area.grid(row=1, column=0, sticky="nsew", padx=(22, 22), pady=(20, 20))
         self.area.columnconfigure(0, weight=1)
         self.area.rowconfigure(0, weight=1)
         self.paginas = {
@@ -649,21 +530,6 @@ class App(tk.Tk):
         self.bind("<Control-o>", lambda e: self.abrir_scan_existente())
         self.bind("<Alt-F4>", lambda e: self.sair())
         self.protocol("WM_DELETE_WINDOW", self.sair)
-        # bordas e cantos para redimensionar (a janela não tem moldura nativa)
-        nt = os.name == "nt"
-        cur = {"e": "size_we" if nt else "sb_h_double_arrow", "s": "size_ns" if nt else "sb_v_double_arrow",
-               "w": "size_we" if nt else "sb_h_double_arrow", "se": "size_nw_se" if nt else "bottom_right_corner",
-               "sw": "size_ne_sw" if nt else "bottom_left_corner"}
-        for modo, kw, cor in (("e", dict(relx=1, rely=0, anchor="ne", width=5, relheight=1), CREME),
-                              ("s", dict(x=250, rely=1, anchor="sw", height=5, relwidth=1, width=-250), CREME),
-                              ("s", dict(x=0, rely=1, anchor="sw", height=5, width=250), VERDE),
-                              ("w", dict(relx=0, rely=0, anchor="nw", width=4, relheight=1), VERDE),
-                              ("se", dict(relx=1, rely=1, anchor="se", width=14, height=14), CREME),
-                              ("sw", dict(relx=0, rely=1, anchor="sw", width=12, height=12), VERDE)):
-            h = tk.Frame(self, bg=cor, cursor=cur[modo])
-            h.place(**kw)
-            h.bind("<ButtonPress-1>", lambda e, m=modo: self._redim_ini(e, m))
-            h.bind("<B1-Motion>", self._redim_mov)
 
     def _montar_lateral(self):
         lat = tk.Frame(self, bg=VERDE, width=250)
@@ -675,8 +541,6 @@ class App(tk.Tk):
         lg = tk.Label(lat, image=self.img_logo, bg=VERDE, cursor="hand2")
         lg.pack(pady=(30, 26))
         lg.bind("<Button-3>", self._menu_contexto)
-        lg.bind("<ButtonPress-1>", self._drag_ini)
-        lg.bind("<B1-Motion>", self._drag_mov)
         self.nav = {}
         for chave, rot, ic in (("mapa", "Mapa", "mapa"), ("3d", "Visualizar em 3D", "cubo"),
                                ("config", "Configurações", "engrenagem"),
@@ -685,7 +549,6 @@ class App(tk.Tk):
             n.pack(fill="x", padx=16, pady=2)
             n.bind("<Button-3>", self._menu_contexto)
             self.nav[chave] = n
-        # faixa xadrez bem embaixo e o mascote logo acima
         sq = 250 / 9.0
         xadrez = Image.new("RGB", (250, round(sq * 2)), ui.rgb(VERDE))
         dd = ImageDraw.Draw(xadrez)
@@ -697,31 +560,6 @@ class App(tk.Tk):
         tk.Label(lat, image=self.img_xad, bg=VERDE, bd=0).pack(side="bottom", fill="x")
         self.img_emb = ui.tk_pil(imagem("emblema.png", 190))
         tk.Label(lat, image=self.img_emb, bg=VERDE).pack(side="bottom", pady=(0, 2))
-
-    def _montar_topo(self):
-        topo = tk.Frame(self.principal, bg=CREME, height=44)
-        topo.grid(row=0, column=0, sticky="ew")
-        topo.grid_propagate(False)
-        topo.bind("<ButtonPress-1>", self._drag_ini)
-        topo.bind("<B1-Motion>", self._drag_mov)
-        topo.bind("<Double-Button-1>", lambda e: self.maximizar())
-        fechar = tk.Canvas(topo, width=58, height=34, bg=CREME, highlightthickness=0, cursor="hand2")
-        fechar.place(relx=1, x=-6, y=0, anchor="ne")
-        self._fechar_cv = fechar
-        self._pintar_fechar(False)
-        fechar.bind("<Enter>", lambda e: self._pintar_fechar(True))
-        fechar.bind("<Leave>", lambda e: self._pintar_fechar(False))
-        fechar.bind("<ButtonRelease-1>", lambda e: self.sair())
-        self.btn_max = IconBtn(topo, "max", self.maximizar, tam=34, px=18, bg=CREME, hov=CREME_ESC, raio=6)
-        self.btn_max.place(relx=1, x=-70, y=0, anchor="ne")
-        IconBtn(topo, "min", self.minimizar, tam=34, px=18, bg=CREME, hov=CREME_ESC, raio=6).place(
-            relx=1, x=-108, y=0, anchor="ne")
-
-    def _pintar_fechar(self, hov):
-        c = self._fechar_cv
-        c.delete("all")
-        c.create_image(0, 0, anchor="nw", image=rr_img(58, 34, 8, VERM_HOV if hov else VERMELHO))
-        c.create_image(29, 17, image=tk_icone("fechar", 18, "#FFFFFF"))
 
     def _menu_contexto(self, e):
         m = tk.Menu(self, tearoff=0, bg=CREME_CLARO, fg=TEXTO, activebackground=VERDE, activeforeground=CREME,
@@ -763,29 +601,13 @@ class App(tk.Tk):
         self._guardar_cfg()
         self.destroy()
 
-    # ---------- cabeçalho padrão das páginas
-    def _cabecalho(self, pai, icone, titulo, sub):
-        p = Painel(pai, bg=CREME, fundo=CREME_CLARO, pad=14)
-        i = p.inner
-        c = tk.Canvas(i, width=64, height=64, bg=CREME_CLARO, highlightthickness=0)
-        c.pack(side="left")
-        c.create_image(32, 32, image=rr_img(62, 62, 14, VERDE))
-        c.create_image(32, 32, image=tk_icone(icone, 38, "#FFF5DB"))
-        t = tk.Frame(i, bg=CREME_CLARO)
-        t.pack(side="left", padx=18)
-        tk.Label(t, text=titulo, bg=CREME_CLARO, fg=TEXTO, font=fonte(22, "bold")).pack(anchor="w")
-        tk.Label(t, text=sub, bg=CREME_CLARO, fg=MUDO, font=fonte(11)).pack(anchor="w")
-        return p
-
     def _titulo_secao(self, pai, texto, bg=CREME_CLARO):
         return tk.Label(pai, text=texto, bg=bg, fg=TEXTO, font=fonte(14, "bold"))
 
-    # ---------- página: mapa
     def _pag_mapa(self):
         pg = tk.Frame(self.area, bg=CREME)
         pg.columnconfigure(0, weight=1)
         pg.rowconfigure(0, weight=1)
-        # estado vazio
         self.vazio = tk.Canvas(pg, bg=CREME, highlightthickness=0)
         self.vazio.grid(row=0, column=0, sticky="nsew")
         self.vazio.bind("<Configure>", self._desenhar_vazio)
@@ -793,9 +615,7 @@ class App(tk.Tk):
                            icone="pasta", w=300, h=54, tam=12, raio=12, icone_px=24, bg=CREME_CLARO)
         self.btn_abrir_scan = Btn(self.vazio, "Abrir um scan 3D (.scap)", self.abrir_scan_existente, estilo="secundario",
                                   icone="abrir", w=300, h=44, tam=10, bg=CREME_CLARO)
-        # mapa
         self.mapa = MapaView(pg, self._ao_selecionar, None)
-        # painéis inferiores
         self.base = tk.Frame(pg, bg=CREME)
         self.base.columnconfigure(0, weight=5, uniform="p")
         self.base.columnconfigure(1, weight=5, uniform="p")
@@ -815,7 +635,6 @@ class App(tk.Tk):
             c.grid(row=0, column=0, sticky="w")
             tk.Label(p, text=t, bg=CREME_CLARO, fg=TEXTO, font=fonte(11, "bold")).grid(row=0, column=1, sticky="w", padx=8)
 
-        # 1 mundo + 2 mapa de cima
         p1 = Painel(self.base, bg=CREME)
         p1.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         i = p1.inner
@@ -840,7 +659,6 @@ class App(tk.Tk):
         self.dd_dim = Dropdown(i, self.v_dim, [], comando=lambda v: self._recarregar_mapa(), bg=CREME_CLARO,
                                icone=ui.tk_pil(cubo_grama(24)))
         self.dd_dim.grid(row=3, column=0, sticky="ew", pady=(8, 0))
-        # 3 área
         p3 = Painel(self.base, bg=CREME)
         p3.grid(row=0, column=1, sticky="nsew", padx=5)
         i = p3.inner
@@ -858,7 +676,6 @@ class App(tk.Tk):
                 c.entry.bind("<FocusOut>", lambda e: self._sel_de_campos())
         i.columnconfigure(1, weight=1)
         i.columnconfigure(3, weight=1)
-        # 4 texturas
         p4 = Painel(self.base, bg=CREME)
         p4.grid(row=0, column=2, sticky="nsew", padx=(5, 10))
         i = p4.inner
@@ -869,11 +686,9 @@ class App(tk.Tk):
                                          ("Salvar estados dos blocos (escadas, lajes, portas)", self.var_estados),
                                          ("Resource packs (opcional)", self.var_packs))):
             Check(i, txt, var, bg=CREME_CLARO, tam=10).grid(row=1 + r, column=0, sticky="w", pady=(8 if r == 0 else 3, 0))
-        # escanear
         self.btn_scan = Btn(self.base, "ESCANEAR", self.escanear, estilo="perigo", icone="play", w=190, h=150, tam=17,
                             raio=16, icone_px=34, bg=CREME)
         self.btn_scan.grid(row=0, column=3, sticky="ns", padx=(0, 0))
-        # barra
         self.rodape = tk.Frame(pg, bg=CREME)
         self.rodape.columnconfigure(0, weight=1)
         self.barra = BarraProgresso(self.rodape, bg=CREME, h=20)
@@ -931,7 +746,6 @@ class App(tk.Tk):
             d.line((x0 * S, y0 * S, x1 * S, y1 * S), fill=v + (255,), width=5 * S)
         return im.resize((150, 140), Image.LANCZOS)
 
-    # ---------- mundo e mapa
     def escolher_mundo(self):
         ult = os.path.dirname(self.cfg["ultimo_mundo"]) if self.cfg["ultimo_mundo"] else ""
         ini = ult if ult and os.path.isdir(ult) and "saves" in ult.replace("\\", "/").lower() else sub_mc("saves")
@@ -948,8 +762,7 @@ class App(tk.Tk):
             self.campo_mundo.estado("erro")
             if self.pagina == "mapa":
                 self._estado_mapa("mapa") if self.vis else None
-            Dialogo.mostrar(self, "erro", "Erro", "Não foi possível carregar o mundo.\nVerifique se o caminho selecionado "
-                            "está correto: a pasta deve conter a pasta \"region\".")
+            Dialogo.mostrar(self, "erro", "Erro", "Não deu para carregar o mundo.\nConfira se a pasta tem uma subpasta \"region\".")
             return
         self.pasta_mundo = pasta
         self.dims = dims
@@ -1004,7 +817,7 @@ class App(tk.Tk):
                 self.fila.put(("visao", vis))
             except mcscan.Cancelado:
                 self.fila.put(("msg", "Cancelado."))
-            except Exception as e:  # noqa
+            except Exception as e:
                 self.fila.put(("erro", str(e)))
         threading.Thread(target=trabalho, daemon=True).start()
 
@@ -1012,8 +825,7 @@ class App(tk.Tk):
         self.vis = vis
         self.mapa.definir_visao(vis)
         self.mapa.msg = None
-        self.set_progresso(0, "Selecione a área da cidade no mapa: arraste com o botão esquerdo. Botão direito move, "
-                              "a roda do mouse dá zoom.")
+        self.set_progresso(0, "Arraste para selecionar a área. Botão direito move, a roda do mouse dá zoom.")
         self.lbl_pct.config(text="")
 
     def _ao_selecionar(self, sel, final):
@@ -1033,8 +845,7 @@ class App(tk.Tk):
                 chao = int(np.percentile(sub, 10))
                 self.v["ymin"].set(str(chao - 3))
                 self.v["ymax"].set(str(int(max(sub.max(), alto.max() if alto.size else sub.max())) + 2))
-                self.set_progresso(None, "Altura sugerida: do chão − 3 até o ponto mais alto da área. Se a cidade tem "
-                                         "porões mais fundos, diminua o Y mín.")
+                self.set_progresso(None, "Altura sugerida: do chão − 3 até o ponto mais alto da área.")
 
     def _sel_de_campos(self):
         try:
@@ -1045,7 +856,6 @@ class App(tk.Tk):
             self.mapa.sel = (min(x1, x2), min(z1, z2), max(x1, x2), max(z1, z2))
             self.mapa._agenda()
 
-    # ---------- progresso
     def set_progresso(self, frac, texto=None):
         if frac is not None:
             self.barra.definir(frac)
@@ -1060,7 +870,6 @@ class App(tk.Tk):
         self.btn_pasta.config(state="normal")
 
     def _painel_sobre_fundo(self, left, top, w, h, raio, fill, outline=None, ow=2):
-        """Painel arredondado já composto sobre o que está atrás dele (o Tk não tem cantos transparentes)."""
         painel = ui.rr_pil(w, h, raio, fill, outline, ow)
         try:
             from PIL import ImageGrab
@@ -1088,7 +897,7 @@ class App(tk.Tk):
         etapa_ids = []
         for k, e in enumerate(etapas):
             y = 140 + 34 * k
-            etapa_ids.append((ov.create_image(40, y, image=rr_img(22, 22, 11, CREME_CLARO, DESAB_FG if False else BORDA, 2)),
+            etapa_ids.append((ov.create_image(40, y, image=rr_img(22, 22, 11, CREME_CLARO, BORDA, 2)),
                               ov.create_text(66, y, anchor="w", text=e, fill=MUDO, font=fonte(10)), y))
         Btn(ov, "Cancelar", self._cancelar_op, estilo="secundario", h=38, w=120, bg=CREME_CLARO).place(
             x=w - 148, y=h - 56)
@@ -1121,15 +930,13 @@ class App(tk.Tk):
     def _cancelar_op(self):
         self.cancelar.set()
 
-    # ---------- escaneamento
     def escanear(self):
         if self.ocupado or not self.dims:
             return
         try:
             x1, z1, x2, z2, ymin, ymax = [int(self.v[k].get()) for k in ("x1", "z1", "x2", "z2", "ymin", "ymax")]
         except ValueError:
-            Dialogo.mostrar(self, "aviso", "Atenção", "Selecione a área no mapa (ou preencha X1, Z1, X2, Z2, Y mín. e "
-                            "Y máx.) antes de escanear.")
+            Dialogo.mostrar(self, "aviso", "Atenção", "Selecione a área no mapa antes de escanear.")
             return
         if x1 == x2 or z1 == z2 or ymin >= ymax:
             Dialogo.mostrar(self, "aviso", "Atenção", "A área escolhida está vazia. Confira os valores de X, Z e Y.")
@@ -1149,8 +956,7 @@ class App(tk.Tk):
         packs = [p.strip() for p in self.cfg["packs"].split(";") if p.strip()] if self.var_packs.get() else []
         off = set(self.cfg["mods_off"])
         if usar_tex and not jar:
-            r = Dialogo.mostrar(self, "aviso", "Atenção", "Sem o jar do Minecraft os blocos do jogo ficam sem textura "
-                                "(só os mods terão).\nDeseja continuar mesmo assim?",
+            r = Dialogo.mostrar(self, "aviso", "Atenção", "Sem o jar do Minecraft os blocos do jogo ficam sem textura.\nContinuar?",
                                 (("Continuar", "primario"), ("Cancelar", "secundario")))
             if r != 0:
                 return
@@ -1170,14 +976,13 @@ class App(tk.Tk):
                     rec = mcscan.Recursos(jar or None, mods or None, packs, [], excluir_mods=off)
                     rec.animar = bool(self.cfg["animadas"])
                     if not rec.tem_fontes:
-                        raise ValueError("Não encontrei nenhuma textura. Confira o jar do Minecraft e a pasta de mods em "
-                                         "Configurações, ou desmarque \"Usar texturas\".")
+                        raise ValueError("Nenhuma textura encontrada. Confira o jar e a pasta de mods em Configurações.")
                 r = mcscan.escanear(pasta, x1, z1, x2, z2, ymin, ymax, saida, estados, nome_dim,
                                     lambda a, b, m: self.fila.put(("prog", a, b, m)), self.cancelar, rec)
                 self.fila.put(("fim", r))
             except mcscan.Cancelado:
                 self.fila.put(("msg", "Cancelado."))
-            except Exception as e:  # noqa
+            except Exception as e:
                 self.fila.put(("erro", str(e)))
         threading.Thread(target=trabalho, daemon=True).start()
 
@@ -1219,7 +1024,7 @@ class App(tk.Tk):
                 while True:
                     m = self.fila.get_nowait()
                     if m[0] == "prog":
-                        ultimo_prog = m          # só a última mensagem de progresso interessa
+                        ultimo_prog = m
                     else:
                         outros.append(m)
             except queue.Empty:
@@ -1239,7 +1044,9 @@ class App(tk.Tk):
 
     def _tratar_msg(self, m):
         tipo = m[0]
-        if tipo == "icone":
+        if tipo == "chamar":
+            m[1]()
+        elif tipo == "icone":
             self.ico_mods[m[1]] = ui.tk_pil(m[2])
             for lin in getattr(self, "linhas_mods", []):
                 if lin.winfo_exists() and lin.nome == m[1]:
@@ -1269,17 +1076,16 @@ class App(tk.Tk):
             Dialogo.mostrar(self, "erro", "Erro", m[1])
 
     def _log_erro(self):
-        """Registra o erro num arquivo e avisa sem travar o programa."""
         import traceback
         txt = traceback.format_exc()
         try:
             with open(os.path.join(pasta_config(), "erro.log"), "a", encoding="utf-8") as f:
                 f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + txt + "\n")
-        except Exception:
+        except OSError:
             pass
         try:
             self.toast("Ocorreu um erro (detalhes em erro.log).", 6000)
-        except Exception:
+        except tk.TclError:
             pass
 
     def report_callback_exception(self, exc, val, tb):
@@ -1288,13 +1094,13 @@ class App(tk.Tk):
         try:
             with open(os.path.join(pasta_config(), "erro.log"), "a", encoding="utf-8") as f:
                 f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + txt + "\n")
-        except Exception:
+        except OSError:
             pass
         try:
             self._fechar_overlay()
             self._bloquear(False)
             self.toast("Ocorreu um erro: %s" % val, 7000)
-        except Exception:
+        except tk.TclError:
             pass
 
     def _fim_scan(self, r):
@@ -1302,7 +1108,7 @@ class App(tk.Tk):
         mb = r["bytes"] / 1048576
         detalhes = ["Arquivo: " + r["arquivo"],
                     "Tamanho: %.2f MB (texturas: %.2f MB)" % (mb, r["bytes_atlas"] / 1048576),
-                    "Blocos guardados: %d | Tipos de bloco: %d | Texturas: %d" % (r["blocos"], r["tipos"], r["texturas"])]
+                    "Blocos: %d | Tipos: %d | Texturas: %d" % (r["blocos"], r["tipos"], r["texturas"])]
         if r["texturas_faltando"]:
             detalhes.append("Texturas não encontradas: %d (ex.: %s)" % (len(r["texturas_faltando"]),
                                                                       ", ".join(r["texturas_faltando"][:4])))
@@ -1346,23 +1152,24 @@ class App(tk.Tk):
         try:
             mv.abrir_no_navegador(scan)
             self.toast("Abri o scan no navegador.")
-        except Exception as e:  # noqa
+        except Exception as e:
             Dialogo.mostrar(self, "erro", "Erro", "Não consegui abrir no navegador.", detalhes=str(e))
 
-    # ---------- página: 3D dentro do app
     def _pag_3d(self):
         pg = tk.Frame(self.area, bg=CREME)
         pg.columnconfigure(0, weight=1)
         pg.rowconfigure(1, weight=1)
-        cab = self._cabecalho(pg, "cubo", "Visualizador 3D", "Veja o seu mapa em 3D, sem sair do Scap")
+        cab = Painel(pg, bg=CREME, fundo=CREME_CLARO, pad=14)
         cab.grid(row=0, column=0, sticky="ew")
         Btn(cab.inner, "Abrir scan...", self.abrir_scan_existente, estilo="primario", icone="abrir", h=46, w=200,
             bg=CREME_CLARO).pack(side="right")
         Btn(cab.inner, "Abrir scan no browser", self.abrir_no_browser, estilo="secundario", icone="abrir", h=46, w=250,
             bg=CREME_CLARO).pack(side="right", padx=(0, 10))
+        self.nome3d = tk.Label(cab.inner, text="Nenhum scan aberto", bg=CREME_CLARO, fg=TEXTO, font=fonte(13, "bold"))
+        self.nome3d.pack(side="left", padx=(6, 0))
         self.v3d = tk.Frame(pg, bg="#0B1F16")
         self.v3d.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
-        self.lbl3d = tk.Label(self.v3d, text="Nenhum scan aberto.\nGere um scan na aba Mapa ou abra um arquivo .scap.",
+        self.lbl3d = tk.Label(self.v3d, text="Gere um scan na aba Mapa ou abra um arquivo .scap.",
                               bg="#0B1F16", fg="#CFE5D4", font=fonte(12), justify="center")
         self.lbl3d.place(relx=0.5, rely=0.5, anchor="center")
         self.v3d.bind("<Configure>", self._ajustar_3d)
@@ -1382,16 +1189,15 @@ class App(tk.Tk):
         if p is not None and p.poll() is None:
             try:
                 p.terminate()
-            except Exception:
+            except OSError:
                 pass
 
     def _garantir_webview(self, depois):
-        """No Windows o 3D embutido precisa do pywebview. Se faltar (rodando pelo Python), instala sozinho."""
         import importlib.util
         if getattr(sys, "frozen", False) or importlib.util.find_spec("webview") is not None:
             depois()
             return
-        self.lbl3d.config(text="Instalando o componente do visualizador 3D (só na primeira vez)…")
+        self.lbl3d.config(text="Instalando o componente do 3D…")
         self.lbl3d.place(relx=0.5, rely=0.5, anchor="center")
 
         def instalar():
@@ -1400,9 +1206,9 @@ class App(tk.Tk):
             try:
                 r = subprocess.run([sys.executable, "-m", "pip", "install", "pywebview"], capture_output=True, text=True, **kw)
                 ok, det = r.returncode == 0, (r.stderr or r.stdout)[-600:]
-            except Exception as e:  # noqa
+            except Exception as e:
                 ok, det = False, str(e)
-            self.after(0, lambda: self._pos_instalar_webview(ok, det, depois))
+            self.fila.put(("chamar", lambda: self._pos_instalar_webview(ok, det, depois)))
         threading.Thread(target=instalar, daemon=True).start()
 
     def _pos_instalar_webview(self, ok, det, depois):
@@ -1411,10 +1217,9 @@ class App(tk.Tk):
         if ok:
             depois()
             return
-        self.lbl3d.config(text="Não consegui instalar o componente do visualizador 3D.")
+        self.lbl3d.config(text="O componente do 3D não instalou.")
         Dialogo.mostrar(self, "erro", "Visualizador 3D",
-                        "Para ver o 3D dentro do Scap é preciso o componente pywebview, e a instalação automática falhou. "
-                        "Rode no terminal: pip install pywebview pythonnet", detalhes=det)
+                        "O componente do 3D não instalou. Rode no terminal: pip install pywebview pythonnet", detalhes=det)
 
     def _carregar_3d(self, scan):
         self._garantir_webview(lambda: self._carregar_3d_ok(scan))
@@ -1424,6 +1229,7 @@ class App(tk.Tk):
         self._parar_3d()
         self._scan3d = scan
         self.lbl3d.config(text="Carregando %s…" % os.path.basename(scan))
+        self.nome3d.config(text=os.path.splitext(os.path.basename(scan))[0])
         self.lbl3d.place(relx=0.5, rely=0.5, anchor="center")
         try:
             if os.name != "nt":
@@ -1439,7 +1245,7 @@ class App(tk.Tk):
             self._proc3d = mv.abrir(scan, self._titulo3d, True, dono, self._arq_pos)
             self._tent3d = 0
             self.after(500, lambda: self._prender_3d(scan))
-        except Exception as e:  # noqa
+        except Exception as e:
             self.lbl3d.config(text="Não consegui abrir o visualizador.")
             Dialogo.mostrar(self, "erro", "Erro", "Não consegui abrir o visualizador 3D.", detalhes=str(e))
 
@@ -1450,14 +1256,12 @@ class App(tk.Tk):
         rc = self._proc3d.poll()
         if rc is not None:
             if rc in (3, 4):
-                self.lbl3d.config(text="O componente do visualizador 3D (pywebview) não iniciou.")
+                self.lbl3d.config(text="O visualizador 3D não iniciou.")
                 Dialogo.mostrar(self, "erro", "Visualizador 3D",
-                                "Não consegui iniciar o visualizador embutido. No Windows ele usa o WebView2 (já vem no Windows 11; "
-                                "no Windows 10 instale o \"WebView2 Runtime\" da Microsoft) e o pacote pywebview com pythonnet.")
+                                "O visualizador não iniciou. No Windows 10, instale o WebView2 Runtime da Microsoft.")
             else:
                 self.lbl3d.config(text="O visualizador fechou. Tente abrir o scan de novo.")
             return
-        # a própria janela do visualizador se encaixa (ver mapscan_viewer._seguir); aqui só informamos a posição
         if mv.achar_janela(self._titulo3d):
             self._hwnd3d = 1
             self.lbl3d.place_forget()
@@ -1473,7 +1277,6 @@ class App(tk.Tk):
         self.after(300, lambda: self._prender_3d(scan))
 
     def _escrever_pos(self):
-        """Grava onde fica o quadro 3D (relativo à janela do app, em pixels lógicos) para a janela do visualizador seguir."""
         try:
             vis = bool(self.pagina == "3d" and self.state() != "iconic" and self.v3d.winfo_viewable() and self.v3d.winfo_width() > 20)
             d = {"vis": vis, "x": self.v3d.winfo_rootx() - self.winfo_rootx(), "y": self.v3d.winfo_rooty() - self.winfo_rooty(),
@@ -1484,7 +1287,7 @@ class App(tk.Tk):
                 with open(tmp, "w", encoding="utf-8") as f:
                     json.dump(d, f)
                 os.replace(tmp, self._arq_pos)
-        except Exception:
+        except (tk.TclError, OSError):
             pass
 
     def _vigiar_3d(self):
@@ -1496,12 +1299,11 @@ class App(tk.Tk):
     def _ajustar_3d(self, e):
         pass
 
-    # ---------- avisos discretos
     def toast(self, texto, ms=4500):
         if self._toast is not None:
             try:
                 self._toast.destroy()
-            except Exception:
+            except tk.TclError:
                 pass
         w, h = 340, 76
         c = tk.Canvas(self, width=w, height=h, bg=CREME, highlightthickness=0)
@@ -1521,12 +1323,9 @@ class App(tk.Tk):
         self._toast = c
         self.after(ms, lambda: c.destroy() if c.winfo_exists() else None)
 
-    # ---------- página: configurações
     def _pag_config(self):
         pg = tk.Frame(self.area, bg=CREME)
         pg.columnconfigure(0, weight=1)
-        self._cabecalho(pg, "engrenagem", "Configurações", "Ajuste os caminhos e as opções do Scap").grid(
-            row=0, column=0, sticky="ew")
         self.c_tex = tk.BooleanVar(value=True)
         self.c_estados = tk.BooleanVar(value=True)
         self.c_anim = tk.BooleanVar(value=True)
@@ -1534,7 +1333,7 @@ class App(tk.Tk):
         self.c_ymin, self.c_ymax = tk.StringVar(), tk.StringVar()
 
         p = Painel(pg, bg=CREME)
-        p.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        p.grid(row=1, column=0, sticky="ew", pady=(0, 0))
         self._titulo_secao(p.inner, "Texturas").grid(row=0, column=0, sticky="w")
         Check(p.inner, "Usar texturas do jogo e dos mods", self.c_tex, bg=CREME_CLARO, tam=11).grid(
             row=1, column=0, sticky="w", pady=(8, 0))
@@ -1556,7 +1355,7 @@ class App(tk.Tk):
             c.entry.bind("<FocusOut>", lambda e, k=k: self._validar_cfg(k))
             Btn(i, "Procurar...", cmd, estilo="primario", h=38, w=130, bg=CREME_CLARO).grid(row=1 + r, column=2,
                                                                                          padx=(10, 0), pady=5)
-        tk.Label(i, text="Vários resource packs: separe com ponto e vírgula (;). O último da lista vence.",
+        tk.Label(i, text="Vários resource packs: separe com ponto e vírgula. O último vence.",
                  bg=CREME_CLARO, fg=MUDO, font=fonte(9)).grid(row=4, column=1, sticky="w")
 
         p = Painel(pg, bg=CREME)
@@ -1573,7 +1372,7 @@ class App(tk.Tk):
         self._titulo_secao(p.inner, "Dados dos blocos").grid(row=0, column=0, sticky="w")
         Check(p.inner, "Salvar estados dos blocos (escadas, lajes, portas)", self.c_estados, bg=CREME_CLARO,
               tam=11).grid(row=1, column=0, sticky="w", pady=(8, 0))
-        Check(p.inner, "Texturas animadas (água, lava, fogo...) — aumenta o arquivo em poucas dezenas de KB", self.c_anim,
+        Check(p.inner, "Texturas animadas (água, lava, fogo...)", self.c_anim,
               bg=CREME_CLARO, tam=11).grid(row=2, column=0, sticky="w", pady=(6, 0))
 
         rod = tk.Frame(pg, bg=CREME)
@@ -1616,7 +1415,7 @@ class App(tk.Tk):
             if ymin >= ymax:
                 raise ValueError
         except ValueError:
-            Dialogo.mostrar(self, "erro", "Erro", "O intervalo vertical é inválido. O Y mínimo deve ser menor que o Y máximo.")
+            Dialogo.mostrar(self, "erro", "Erro", "O Y mínimo deve ser menor que o Y máximo.")
             return
         self.cfg["texturas"] = bool(self.c_tex.get())
         self.cfg["estados"] = bool(self.c_estados.get())
@@ -1640,7 +1439,7 @@ class App(tk.Tk):
             self.cfg["texturas"] = bool(self.var_tex.get())
             self.cfg["estados"] = bool(self.var_estados.get())
             self.cfg.salvar()
-        except Exception:
+        except tk.TclError:
             pass
 
     def _pick_jar(self):
@@ -1668,15 +1467,13 @@ class App(tk.Tk):
             self.c_packs.set(";".join(atual + [c for c in cs if c not in atual]))
             self._validar_cfg("packs")
 
-    # ---------- página: mods
     def _pag_mods(self):
         pg = tk.Frame(self.area, bg=CREME)
         pg.columnconfigure(0, weight=1)
         pg.rowconfigure(2, weight=1)
-        self._cabecalho(pg, "mods", "Mods", "Gerencie os mods utilizados no mapa").grid(row=0, column=0, sticky="ew")
         self.v_modsdir, self.v_packs_m = tk.StringVar(), tk.StringVar()
         p = Painel(pg, bg=CREME)
-        p.grid(row=1, column=0, sticky="ew", pady=(12, 0))
+        p.grid(row=1, column=0, sticky="ew", pady=(0, 0))
         i = p.inner
         i.columnconfigure(0, weight=1)
         self._titulo_secao(i, "Pasta de mods").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
@@ -1817,7 +1614,7 @@ class App(tk.Tk):
                         continue
                     im = Image.open(io.BytesIO(z.read(alvo))).convert("RGBA").resize((28, 28), Image.LANCZOS)
                 self.fila.put(("icone", f, im))
-            except Exception:
+            except (zipfile.BadZipFile, OSError):
                 continue
 
     def _marcar_todos(self, sim):
@@ -1832,17 +1629,101 @@ class App(tk.Tk):
         self.cfg["mods_off"] = [f for f, v in self._vars_mods.items() if not v.get()]
         self.cfg.salvar()
 
-    # ---------- página: sobre
+    def buscar_atualizacao(self):
+        if self._atu_ocupado():
+            return
+        self._atu = None
+        self.btn_instalar_atu.grid_remove()
+        self.barra_atualizar.grid_remove()
+        self.btn_atualizar.habilitar(False)
+        self._atu_msg("Procurando…", MUDO)
+
+        def trabalho():
+            r = upd.buscar(VERSAO)
+            self.fila.put(("chamar", lambda: self._atu_resultado(r)))
+        threading.Thread(target=trabalho, daemon=True).start()
+
+    def _atu_ocupado(self):
+        return not self.btn_atualizar.habilitado
+
+    def _atu_msg(self, texto, cor=MUDO):
+        self.lbl_atualizar.config(text=texto, fg=cor)
+
+    def _atu_resultado(self, r):
+        self.btn_atualizar.habilitar(True)
+        if not r.get("ok"):
+            self._atu_msg(r.get("erro", "Não foi possível verificar."), ERRO)
+        elif not r["nova"]:
+            self._atu_msg("Você está na última versão.", OK)
+        else:
+            self._atu = r
+            notas = r["notas"].replace("\r", "").strip()
+            if len(notas) > 260:
+                notas = notas[:257].rstrip() + "…"
+            txt = "Nova versão: %s." % r["versao"] + ("\n" + notas if notas else "")
+            if not upd.pode_instalar():
+                txt += "\nInstale pelo Scap do Windows."
+            self._atu_msg(txt, TEXTO)
+            if upd.pode_instalar():
+                self.btn_instalar_atu.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+    def instalar_atualizacao(self):
+        r = self._atu
+        if not r or not upd.pode_instalar() or self.ocupado:
+            return
+        self.btn_instalar_atu.habilitar(False)
+        self.btn_atualizar.habilitar(False)
+        self.barra_atualizar.definir(0)
+        self.barra_atualizar.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        self._atu_msg("Baixando %s…" % r["versao"], MUDO)
+        import tempfile
+        destino = os.path.join(tempfile.gettempdir(), "Scap-Setup-%s.exe" % r["versao"])
+
+        def trabalho():
+            erro = upd.baixar(r["url"], destino, lambda f: self.fila.put(("chamar", lambda: self.barra_atualizar.definir(f))),
+                              tamanho=r.get("tamanho", 0))
+            self.fila.put(("chamar", lambda: self._atu_baixou(erro, destino)))
+        threading.Thread(target=trabalho, daemon=True).start()
+
+    def _atu_baixou(self, erro, destino):
+        if erro:
+            self.btn_instalar_atu.habilitar(True)
+            self.btn_atualizar.habilitar(True)
+            self.barra_atualizar.grid_remove()
+            self._atu_msg(erro, ERRO)
+            return
+        self._atu_msg("Instalando… o Scap reabre sozinho.", OK)
+        try:
+            upd.instalar(destino)
+        except Exception:
+            self.btn_instalar_atu.habilitar(True)
+            self.btn_atualizar.habilitar(True)
+            self._atu_msg("Não deu para abrir o instalador.", ERRO)
+            return
+        self.after(1200, self._fechar_para_atualizar)
+
+    def _fechar_para_atualizar(self):
+        try:
+            self._parar_3d()
+            self._guardar_cfg()
+        finally:
+            self.destroy()
+            os._exit(0)
+
     def _pag_sobre(self):
         pg = tk.Frame(self.area, bg=CREME)
         pg.columnconfigure(0, weight=1)
         pg.columnconfigure(1, weight=1)
-        self._cabecalho(pg, "info", "Sobre", "Informações sobre o Scap.").grid(row=0, column=0, columnspan=2,
-                                                                                  sticky="ew")
+        pg.rowconfigure(1, weight=1)
+        rola = ListaRolavel(pg, bg=CREME)
+        rola.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        corpo = rola.inner
+        corpo.columnconfigure(0, weight=1)
+        corpo.columnconfigure(1, weight=1)
         self._img_sobre = ui.tk_pil(ui.marca_img(300, VERDE))
         self._img_masc = ui.tk_pil(imagem("emblema.png", 120))
-        topo = tk.Frame(pg, bg=CREME)
-        topo.grid(row=1, column=0, columnspan=2, pady=(18, 8))
+        topo = tk.Frame(corpo, bg=CREME)
+        topo.grid(row=0, column=0, columnspan=2, pady=(18, 8))
         lin = tk.Frame(topo, bg=CREME)
         lin.pack()
         tk.Label(lin, image=self._img_masc, bg=CREME).pack(side="left", padx=(0, 22))
@@ -1851,8 +1732,8 @@ class App(tk.Tk):
         tk.Frame(topo, bg=BORDA, height=1, width=420).pack(pady=(14, 0))
 
         def cartao(r, c, icone, titulo):
-            p = Painel(pg, bg=CREME)
-            p.grid(row=r, column=c, sticky="nsew", padx=(0 if c == 0 else 8, 8 if c == 0 else 0), pady=8)
+            p = Painel(corpo, bg=CREME)
+            p.grid(row=r - 1, column=c, sticky="nsew", padx=(0 if c == 0 else 8, 8 if c == 0 else 0), pady=8)
             i = p.inner
             i.columnconfigure(1, weight=1)
             cv = tk.Canvas(i, width=44, height=44, bg=CREME_CLARO, highlightthickness=0)
@@ -1863,17 +1744,25 @@ class App(tk.Tk):
             return i
         i = cartao(2, 0, "cubo", "Versão")
         Campo(i, tk.StringVar(value=VERSAO), h=40, somente_leitura=True).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        self.btn_atualizar = Btn(i, "Buscar atualizações", self.buscar_atualizacao, estilo="secundario", icone="atualizar",
+                                 h=40, w=230, bg=CREME_CLARO)
+        self.btn_atualizar.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.lbl_atualizar = tk.Label(i, text="", bg=CREME_CLARO, fg=MUDO, font=fonte(10), wraplength=380, justify="left")
+        self.lbl_atualizar.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.barra_atualizar = BarraProgresso(i, bg=CREME_CLARO, h=14)
+        self.btn_instalar_atu = Btn(i, "Instalar atualização", self.instalar_atualizacao, estilo="primario", icone="play",
+                                    h=40, w=230, bg=CREME_CLARO)
+        self._atu = None
         i = cartao(2, 1, "doc", "Descrição")
-        tk.Label(i, text="O Scap permite gerar uma visão completa do seu mundo do Minecraft, combinando os blocos, "
-                         "biomas e estruturas em um mapa detalhado, com suporte a mods e resource packs.",
-                 bg=CREME_CLARO, fg=TEXTO, font=fonte(10), wraplength=420, justify="left").grid(row=1, column=0, columnspan=2,
-                                                                                                sticky="w", pady=(10, 0))
+        tk.Label(i, text=DESCRICAO, bg=CREME_CLARO, fg=TEXTO, font=fonte(10), wraplength=420,
+                 justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
         i = cartao(3, 0, "pessoa", "Autor")
         tk.Label(i, text="Essie N Pierot", bg=CREME_CLARO, fg=TEXTO, font=fonte(11, "bold")).grid(row=1, column=0, columnspan=2,
                                                                                                sticky="w", pady=(10, 0))
-        i = cartao(3, 1, "pasta", "Tecnologias")
-        tk.Label(i, text="Minecraft (Java Edition)\nMods e Resource Packs (opcional)", bg=CREME_CLARO, fg=TEXTO,
-                 font=fonte(10), justify="left").grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        i = cartao(3, 1, "pasta", "Recursos")
+        for r, texto in enumerate(RECURSOS):
+            tk.Label(i, text="•  " + texto, bg=CREME_CLARO, fg=TEXTO, font=fonte(10), justify="left").grid(
+                row=1 + r, column=0, columnspan=2, sticky="w", pady=(10 if r == 0 else 3, 0))
         return pg
 
 
@@ -1884,7 +1773,6 @@ def VERDE_MED_():
 VERM_HOV = ui.VERM_HOV
 
 
-# ---------------------------------------------------------------- tela de abertura
 def ctypes_user32():
     import ctypes
     return ctypes.windll.user32

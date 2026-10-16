@@ -1,23 +1,11 @@
-/*
- * mcscan_leitor.js — lê arquivos .scap (versão 2, gerados por mcscan.py) no navegador
- * e prepara os dados para o visualizador: índice de colunas, culling de faces e
- * malhas por pedaço (chunk) e em baixa resolução (LOD).
- *
- *   const scan = await McScan.carregar("cidade.scap");
- *   McScan.indexar(scan);
- *
- * O desenho em WebGL fica em mcscan_visualizador.js.
- * Precisa de um navegador atual (usa DecompressionStream).
- */
 (function (raiz) {
   "use strict";
 
   var F_TRANSP = 1, F_OPACO = 2, F_TRANSLUC = 4, F_AGUA = 8, F_CULLSAME = 16;
-  var SUB = 64;                  // subdivisões por bloco nas posições dos vértices (1/64 de bloco)
-  var BIAS = 4 * SUB;            // somado às posições para aceitar modelos que saem até 4 blocos da célula
+  var SUB = 64;
+  var BIAS = 4 * SUB;
   var DX = [0, 0, 0, 0, -1, 1], DY = [-1, 1, 0, 0, 0, 0], DZ = [0, 0, -1, 1, 0, 0];
 
-  // Descompacta direto num buffer do tamanho exato (se conhecido), sem cópias extras na memória.
   async function inflar(u8, tamanho) {
     var fluxo = new Blob([u8]).stream().pipeThrough(new DecompressionStream("deflate"));
     if (!tamanho) return new Response(fluxo).arrayBuffer();
@@ -25,7 +13,7 @@
     for (;;) {
       var r = await leitor.read();
       if (r.done) break;
-      if (pos + r.value.length > tamanho) {            // tamanho previsto errado: cresce em vez de falhar
+      if (pos + r.value.length > tamanho) {
         var maior = new Uint8Array(Math.max(tamanho * 2, pos + r.value.length));
         maior.set(saida.subarray(0, pos)); saida = maior; tamanho = maior.length;
       }
@@ -52,7 +40,7 @@
     try { raw = await inflar(new Uint8Array(buf, 17 + lc, lp), 2 * nc + 5 * nr); }
     catch (e) { throw etapa("descompactar " + Math.round((2 * nc + 5 * nr) / 1048576) + " MB", e); }
     return {
-      cab: cab,
+      cab: cab, bruto: buf,
       contagens: new Uint16Array(raw, 0, nc),
       vazios: new Uint16Array(raw, 2 * nc, nr),
       ids: new Uint16Array(raw, 2 * nc + 2 * nr, nr),
@@ -67,7 +55,6 @@
     return decodificar(await resp.arrayBuffer());
   }
 
-  /* Percorre os trechos: fn(x, y, z, id, comprimento) */
   function percorrer(scan, fn) {
     var cab = scan.cab, ncx = cab.chunks.ncx;
     var r = 0;
@@ -84,7 +71,6 @@
     }
   }
 
-  /* Câmera isométrica: 4 cantos (0: sudeste, 1: sudoeste, 2: noroeste, 3: nordeste) */
   function baseCamera(cam) {
     cam = cam & 3;
     var sx = (cam === 0 || cam === 3) ? 1 : -1, sz = (cam === 0 || cam === 1) ? 1 : -1;
@@ -99,7 +85,6 @@
     return { r: r, u: u, f: f, sx: sx, sz: sz };
   }
 
-  /* Índices por coluna, topo de cada coluna e topo de cada chunk (coordenadas relativas à área) */
   function indexar(scan) {
     if (scan.colIni) return scan;
     var cab = scan.cab, area = cab.area, ch = cab.chunks;
@@ -137,8 +122,6 @@
     return scan;
   }
 
-  /* "Horizonte diagonal": D(x,z) = max_k (topo(x+k*sx, z+k*sz) - k). Serve para saber, sem marchar,
-     que nada pode esconder uma célula. */
   function horizonte(scan, cam) {
     scan._hz = scan._hz || {};
     if (scan._hz[cam]) return scan._hz[cam];
@@ -158,22 +141,66 @@
     return D;
   }
 
-  /* Sol de outono: baixo (~30 graus), vindo de trás e da esquerda da câmera. h = direção horizontal até o sol. */
-  var LUZ = { az: 38, elev: 30, noite: 0, pos: "" };   // pos: "" = sol de outono (atrás-esquerda da câmera); "n","s","l","o" = ponto cardeal fixo no mundo   // az em graus a partir de trás da câmera (+ = esquerda da tela); noite 0/1
-  function chaveLuz() { return LUZ.az + "_" + LUZ.elev + "_" + LUZ.noite + "_" + LUZ.pos; }
+  var LUZ = { az: 38, elev: 30, noite: 0, pos: "", termo: -1, tempo: "" };
+  var TERMOS = [["C1A173", 0.32, "6EAE35", "43B244", 0.0, "96C24E", 0.024],
+    ["C1A173", 0.16, "5BB126", "43B244", 0.1, "96C24E", 0.096],
+    ["000000", 0.0, "48B518", "43B244", 0.2, "96C24E", 0.18],
+    ["000000", 0.0, "48B518", "43B244", 0.25, "96C24E", 0.21600002],
+    ["7FB80E", 0.16, "48B518", "43B244", 0.3, "96C24E", 0.14400001],
+    ["7FB80E", 0.32, "48B518", "43B244", 0.4, "96C24E", 0.120000005],
+    ["7FB80E", 0.48, "48B518", "D2D97A", 0.4, "5BAE23", 0.120000005],
+    ["7FB80E", 0.64, "4DB516", "D2D97A", 0.5, "5BAE23", 0.072000004],
+    ["7FB80E", 0.8, "53B516", "D2D97A", 0.6, "000000", 0.0],
+    ["7FB80E", 0.8, "58B515", "D2D97A", 0.65, "5BAE23", 0.120000005],
+    ["8FB017", 0.8, "5EB614", "D2D97A", 0.55, "5BAE23", 0.060000002],
+    ["9FA821", 0.8, "75BC12", "D2D97A", 0.4, "000000", 0.0],
+    ["B0A12B", 0.8, "A3C40C", "FBA414", 0.42, "BEC936", 0.060000002],
+    ["C09935", 0.8, "D1CC06", "FBA414", 0.7, "BEC936", 0.120000005],
+    ["D1923F", 0.8, "FFD400", "FBA414", 0.9, "BEC936", 0.14400001],
+    ["D1923F", 0.8, "FFD400", "FBA414", 0.95, "BEC936", 0.18],
+    ["CD9549", 0.8, "FFD400", "F68719", 0.8, "BEC936", 0.21600002],
+    ["CA9853", 0.8, "F2C917", "F26B1F", 0.9, "BEC936", 0.14400001],
+    ["C79B5E", 0.8, "E6BF2E", "DD7A32", 0.7, "253D24", 0.21600002],
+    ["C49E68", 0.8, "D9B545", "CF843F", 0.4, "253D24", 0.24000001],
+    ["C1A173", 0.8, "CDAB5C", "AD9E5F", 0.8, "253D24", 0.3],
+    ["C1A173", 0.8, "A8A560", "AD9E5F", 0.7, "253D24", 0.18],
+    ["C1A173", 0.64, "95A852", "AD9E5F", 0.6, "253D24", 0.096],
+    ["C1A173", 0.48, "82AB43", "AD9E5F", 0.3, "253D24", 0.060000002]];
+  var NOMES_TERMOS = ["Início da Primavera", "Água da Chuva", "Despertar dos Insetos", "Equinócio da Primavera", "Verde Fresco", "Chuva dos Grãos",
+    "Início do Verão", "Plenitude Menor", "Grãos na Espiga", "Solstício de Verão", "Calor Menor", "Calor Maior",
+    "Início do Outono", "Fim do Calor", "Orvalho Branco", "Equinócio de Outono", "Orvalho Frio", "Primeira Geada",
+    "Início do Inverno", "Neve Leve", "Neve Pesada", "Solstício de Inverno", "Frio Menor", "Frio Maior"];
+  var NEVE_TERMO = [0.25, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.6, 1, 1, 0.9, 0.7];
+  function tintasDe(cab) {
+    var out = {}, t = TERMOS[LUZ.termo];
+    for (var k in cab.tintas) out[k] = hexRGB(cab.tintas[k]);
+    if (!t) return out;
+    function mistura(a, hex, m) { var b = hexRGB(hex); return [a[0] + (b[0] - a[0]) * m, a[1] + (b[1] - a[1]) * m, a[2] + (b[2] - a[2]) * m]; }
+    if (out[1]) out[1] = mistura(out[1], t[0], t[1]);
+    if (out[4]) out[4] = mistura(out[4], t[5], t[6]);
+    if (out[5]) out[5] = mistura(out[5], t[3], t[4]);
+    if (out[2]) {
+      var lf = hexRGB(t[2]), bs = hexRGB("48B518");
+      out[2] = [Math.min(1, Math.max(0, out[2][0] + lf[0] - bs[0])), Math.min(1, Math.max(0, out[2][1] + lf[1] - bs[1])), Math.min(1, Math.max(0, out[2][2] + lf[2] - bs[2]))];
+    }
+    return out;
+  }
+  function cobertura() { return LUZ.tempo === "neve" ? 1 : (LUZ.termo >= 0 ? NEVE_TERMO[LUZ.termo] : 0); }
+  function hash3(x, y, z) { var h = (x * 374761393 + y * 668265263 + z * 2147483647) | 0; h = (h ^ (h >>> 13)) * 1274126177 | 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+  function chaveLuz() { return LUZ.az + "_" + LUZ.elev + "_" + LUZ.noite + "_" + LUZ.pos + "_" + LUZ.termo + "_" + LUZ.tempo; }
   function configLuz(c) {
-    if (c) { if (c.az != null) LUZ.az = +c.az; if (c.elev != null) LUZ.elev = Math.max(8, Math.min(80, +c.elev)); if (c.noite != null) LUZ.noite = c.noite ? 1 : 0; if (c.pos != null) LUZ.pos = String(c.pos); }
-    return { az: LUZ.az, elev: LUZ.elev, noite: LUZ.noite, pos: LUZ.pos };
+    if (c) { if (c.az != null) LUZ.az = +c.az; if (c.elev != null) LUZ.elev = Math.max(8, Math.min(80, +c.elev)); if (c.noite != null) LUZ.noite = c.noite ? 1 : 0; if (c.pos != null) LUZ.pos = String(c.pos);
+      if (c.termo != null) LUZ.termo = (c.termo >= 0 && c.termo < 24) ? (c.termo | 0) : -1; if (c.tempo != null) LUZ.tempo = (c.tempo === "chuva" || c.tempo === "neve") ? c.tempo : ""; }
+    return { az: LUZ.az, elev: LUZ.elev, noite: LUZ.noite, pos: LUZ.pos, termo: LUZ.termo, tempo: LUZ.tempo };
   }
   function sol(sx, sz) {
-    var elevG = LUZ.pos ? 24 : 27;   // nascer e pôr do sol: sol baixo, sombras longas
+    var elevG = LUZ.pos ? 24 : 58;
     var SOL_AZ = LUZ.az * Math.PI / 180, SOL_ELEV = elevG * Math.PI / 180;
-    var k = Math.SQRT1_2, bx = sx * k, bz = sz * k, rx = sz * k, rz = -sx * k;   // trás da câmera e direita da tela
+    var k = Math.SQRT1_2, bx = sx * k, bz = sz * k, rx = sz * k, rz = -sx * k;
     var c = Math.cos(SOL_AZ), sn = Math.sin(SOL_AZ);
     var hx = bx * c - rx * sn, hz = bz * c - rz * sn;
-    var CARD = { n: [0, -1], s: [0, 1], l: [1, 0], o: [-1, 0] };      // norte = -z, sul = +z, leste = +x, oeste = -x
+    var CARD = { n: [0, -1], s: [0, 1], l: [1, 0], o: [-1, 0] };
     if (CARD[LUZ.pos]) {
-      // o ponto cardeal manda, mas inclina ~35 graus para o lado da câmera: assim o sol sempre bate em alguma face visível
       var ux = CARD[LUZ.pos][0] * 0.82 + bx * 0.57, uz = CARD[LUZ.pos][1] * 0.82 + bz * 0.57, ul = Math.hypot(ux, uz);
       hx = ux / ul; hz = uz / ul;
     }
@@ -181,7 +208,6 @@
     return { hx: hx, hz: hz, lx: hx * ce, ly: se, lz: hz * ce, subida: Math.tan(SOL_ELEV) };
   }
 
-  /* ---------- vértices ---------- */
   function Saida() {
     this.cap = 4096;
     this.buf = new ArrayBuffer(this.cap * 16);
@@ -206,14 +232,12 @@
     return [parseInt(h.substr(0, 2), 16) / 255, parseInt(h.substr(2, 2), 16) / 255, parseInt(h.substr(4, 2), 16) / 255];
   }
 
-  /* [x, y, largura, altura] da textura no atlas, em pixels (atlas novo com retângulos ou antigo em grade) */
   function retanguloTextura(at, t) {
     if (at.rects) return at.rects[t];
     var C = at.colunas, T = at.tile;
     return [(t % C) * T, Math.floor(t / C) * T, T, T];
   }
 
-  /* Modelo preparado para uma câmera: só as faces viradas para ela, com posições inteiras em 1/16 */
   function prepararModelo(cab, sx, sz, m) {
     var at = cab.atlas;
     var qs = cab.modelos[m], lista = [];
@@ -232,7 +256,7 @@
       var len = Math.hypot(nx, ny, nz);
       if (len < 1e-6) continue;
       nx /= len; ny /= len; nz /= len;
-      if (nx * sx + ny + nz * sz <= 1e-4) continue;      // de costas para a câmera
+      if (nx * sx + ny + nz * sz <= 1e-4) continue;
       var tex = q[0], rc = retanguloTextura(at, tex);
       var pos = new Int16Array(12), uvs = new Uint16Array(8);
       for (var a = 0; a < 12; a++) pos[a] = Math.round(v[a] * (SUB / 16));
@@ -243,7 +267,6 @@
       }
       var SO = sol(sx, sz), lam = Math.max(0, nx * SO.lx + ny * SO.ly + nz * SO.lz);
       var sombra = q[3] ? Math.min(1.12, 0.40 + 1.12 * lam) : 1;
-      // direção do eixo se a face é alinhada (0..5 como DX/DY/DZ), senão -1 (sem sombra de canto)
       var dir = -1;
       if (Math.abs(nx) > 0.99) dir = nx > 0 ? 5 : 4;
       else if (Math.abs(ny) > 0.99) dir = ny > 0 ? 1 : 0;
@@ -253,7 +276,6 @@
     return lista;
   }
 
-  /* Contexto por câmera: funções de consulta e de construção de malha */
   function contexto(scan, cam, opc) {
     indexar(scan);
     cam = cam & 3;
@@ -266,14 +288,13 @@
     var colIni = scan.colIni, yIni = scan.yIni, ids = scan.ids, comps = scan.comprimentos;
     var D = horizonte(scan, cam);
     var semOclusao = !!(opc && opc.semOclusao);
-    var tintas = {};
-    for (var k in cab.tintas) tintas[k] = hexRGB(cab.tintas[k]);
+    var tintas = tintasDe(cab);
+    var NEVE = cobertura(), CHUVA = LUZ.tempo === "chuva";
     var flags = new Uint8Array(pal.length);
     for (var i = 0; i < pal.length; i++) flags[i] = pal[i].f;
     var prep = new Array(cab.modelos.length);
-    var ax0 = area.x1 - ch.cx0 * 16, az0 = area.z1 - ch.cz0 * 16;   // área-local -> chunk-local
+    var ax0 = area.x1 - ch.cx0 * 16, az0 = area.z1 - ch.cz0 * 16;
 
-    /* id do bloco numa célula (coordenadas relativas à área): 0 = ar/fora, -1 = abaixo do limite inferior */
     function idEm(xl, yr, zl) {
       if (yr < 0) return -1;
       if (yr >= H || xl < 0 || xl >= Wx || zl < 0 || zl >= Dz) return 0;
@@ -287,7 +308,6 @@
       return 0;
     }
 
-    /* A célula está totalmente escondida atrás de um cubo opaco no caminho da câmera? */
     function oculto(xl, yr, zl) {
       var nx = xl + sx, nz = zl + sz;
       if (nx < 0 || nx >= Wx || nz < 0 || nz >= Dz) return false;
@@ -304,7 +324,7 @@
     var comAO = !(opc && opc.semSombras);
     var T = scan.topo;
     var SO = sol(sx, sz), SOL_HX = SO.hx, SOL_HZ = SO.hz, SOL_SUBIDA = SO.subida, SOL_PASSOS = 28;
-    function luz(px, py, pz) {                       // 0 = sombra, 1 = sol (média de 3 raios: penumbra suave)
+    function luz(px, py, pz) {
       var claro = 0;
       for (var r = -1; r <= 1; r++) {
         var ox = -SOL_HZ * r * 0.36, oz = SOL_HX * r * 0.36, livre = 1;
@@ -317,11 +337,9 @@
       }
       return claro / 3;
     }
-    /* ---- noite: blocos que emitem luz e luz de bloco aproximada por vértice ---- */
     var NOITE = LUZ.noite === 1, emNivel = new Uint8Array(pal.length), emCor = new Array(pal.length), emCache = {};
-    var ondaTipo = new Uint8Array(pal.length), ondaMeia = new Int8Array(pal.length);   // 1 = folhas, 2 = plantas, 3 = trepadeiras
+    var ondaTipo = new Uint8Array(pal.length), ondaMeia = new Int8Array(pal.length);
     if (NOITE) {
-      // [parte do nome, nível de luz, cor RGB da luz] - o primeiro que casar vale (mais específicos primeiro)
       var QUENTE = [1.15, 0.62, 0.22], ALMA = [0.25, 0.85, 1.0];
       var TAB = [["soul_", 14, ALMA], ["sea_lantern", 15, [0.65, 0.95, 1.1]], ["end_rod", 14, [0.95, 0.95, 1.1]], ["beacon", 15, [0.7, 1.0, 1.2]],
         ["verdant_froglight", 15, [0.5, 1.0, 0.5]], ["pearlescent_froglight", 15, [1.0, 0.6, 1.0]], ["froglight", 15, [1.1, 0.85, 0.35]],
@@ -337,7 +355,6 @@
         if (nm.indexOf("lit=true") >= 0 && !emNivel[pi]) { emNivel[pi] = 13; emCor[pi] = [1.1, 0.75, 0.4]; }
       }
     }
-    /* vento: folhas balançam pouco, plantas balançam mais na ponta, trepadeiras inteiras */
     for (var wi = 0; wi < pal.length; wi++) {
       var wn = (pal[wi].n || ""), wb = wn.split("[")[0];
       if (!wb || (pal[wi].f & F_TRANSLUC)) continue;
@@ -348,7 +365,27 @@
         ondaMeia[wi] = wn.indexOf("half=upper") >= 0 ? 1 : (wn.indexOf("half=lower") >= 0 ? -1 : 0);
       }
     }
-    function emissores(i, j) {          // lâmpadas do chunk (i,j) e dos vizinhos: [x, y, z, nível] em coordenadas da área
+    var ehJanela = new Uint8Array(pal.length), semNeve = new Uint8Array(pal.length);
+    for (var ji = 0; ji < pal.length; ji++) {
+      var jn = (pal[ji].n || ""), jb = jn.split("[")[0];
+      if (!(flags[ji] & F_OPACO) && /glass|window/.test(jb) && !/tinted|water|ice/.test(jb)) ehJanela[ji] = 1;
+      if (/lava|fire|magma|lamp|lantern|torch|glow|shroomlight|froglight|beacon|campfire|portal|rail|water|ice|snow/.test(jb)) semNeve[ji] = 1;
+    }
+    var semPoca = new Uint8Array(pal.length);
+    for (var pj = 0; pj < pal.length; pj++) if (/planks|slab|stair|log|wood|leaves|glass|pane|carpet|fence|wall|door|trapdoor|bed|wool|shutter|copycat/.test((pal[pj].n || "").split("[")[0])) semPoca[pj] = 1;
+    var JANELA_COR = [[1.30, 0.86, 0.42], [1.25, 0.95, 0.58], [1.18, 0.78, 0.46], [1.32, 0.90, 0.50], [0.80, 0.98, 1.25]];
+    function janelaAcesa(xl, yr, zl) {
+      var ladoX = opaco(xl - 1, yr, zl) + opaco(xl + 1, yr, zl), ladoZ = opaco(xl, yr, zl - 1) + opaco(xl, yr, zl + 1);
+      if (ladoX < 1 && ladoZ < 1) return null;
+      var teto = false;
+      for (var dy = 1; dy <= 7 && !teto; dy++) teto = opaco(xl, yr + dy, zl) === 1;
+      if (!teto) return null;
+      var h = hash3(xl >> 1, yr >> 2, zl >> 1);
+      if (h > 0.30) return null;
+      var c = JANELA_COR[h < 0.03 ? 4 : (h * 100 | 0) % 4];
+      return [c[0], c[1], c[2], 0.85 + 0.3 * hash3(xl, yr, zl)];
+    }
+    function emissores(i, j) {
       var k = i + "," + j;
       if (emCache[k]) return emCache[k];
       var lista = [], visto = {};
@@ -362,7 +399,7 @@
             if (!nv) continue;
             for (var kk = 0; kk < comps[r]; kk++) {
               var x = ox + (loc & 15), y = yIni[r] + kk, z = oz + (loc >> 4);
-              var h = (x >> 1) + "," + (y >> 1) + "," + (z >> 1);   // um por célula 2x2x2 (lagos de lava, etc.)
+              var h = (x >> 1) + "," + (y >> 1) + "," + (z >> 1);
               if (visto[h]) continue;
               visto[h] = 1; var ec = emCor[ids[r]] || [1.15, 0.7, 0.3]; lista.push([x + 0.5, y + 0.5, z + 0.5, nv, ec[0], ec[1], ec[2]]);
             }
@@ -375,12 +412,11 @@
     var AO_TAB = [0.52, 0.7, 0.85, 1];
     function opaco(x, y, z) { var i = idEm(x, y, z); return i > 0 && (flags[i] & F_OPACO) ? 1 : 0; }
 
-    /* Constrói a malha do chunk (i, j) (índices relativos). S = {opaco, transl} (Saida) */
     function malhaChunk(i, j, S) {
       S.opaco.limpar(); S.transl.limpar();
       var chunk = j * ncx + i;
       var base = chunk << 8;
-      var cx0l = (ch.cx0 + i) * 16 - area.x1, cz0l = (ch.cz0 + j) * 16 - area.z1;   // origem do chunk, relativa à área
+      var cx0l = (ch.cx0 + i) * 16 - area.x1, cz0l = (ch.cz0 + j) * 16 - area.z1;
       var EM = NOITE ? emissores(i, j) : null, nEM = EM ? EM.length : 0;
       for (var loc = 0; loc < 256; loc++) {
         var col = base | loc, r0 = colIni[col], r1 = colIni[col + 1];
@@ -398,6 +434,10 @@
           for (var kk = 0, n = comps[r]; kk < n; kk++) {
             var yr = yIni[r] + kk;
             if (!semOclusao && oculto(xl, yr, zl)) continue;
+            var jan = (NOITE && ehJanela[id]) ? janelaAcesa(xl, yr, zl) : null;
+            var noTopo = dest === S.opaco && ond !== 2 && ond !== 3 && !(fl & F_AGUA) && yr >= T[zl * Wx + xl];
+            var cobreNeve = NEVE > 0 && noTopo && !semNeve[id] && (NEVE >= 1 || hash3(xl >> 1, 11, zl >> 1) < NEVE);
+            var poca = CHUVA && !cobreNeve && noTopo && ond === 0 && !semNeve[id] && !semPoca[id];
             for (var qi = 0; qi < modelo.length; qi++) {
               var q = modelo[qi];
               if (q.cull >= 0) {
@@ -411,14 +451,15 @@
               dest.garantir(4);
               var u16 = dest.u16, u8 = dest.u8, nv = dest.nv;
               var cr = q.sh, cg = q.sh, cb = q.sh;
-              if (q.tint >= 0 && tint) { cr *= tint[0]; cg *= tint[1]; cb *= tint[2]; }
+              var neveAqui = cobreNeve && q.dir === 1, pocaAqui = poca && q.dir === 1 && q.pos[2 * 0 + 1] >= SUB - 4;
+              if (q.tint >= 0 && tint && !neveAqui) { cr *= tint[0]; cg *= tint[1]; cb *= tint[2]; }
               var bx = lx * SUB + BIAS, by = yr * SUB + BIAS, bz = lz * SUB + BIAS;
               var usaAO = comAO && q.dir >= 0 && dest === S.opaco;
               if (usaAO) {
-                var d = q.dir, ea = d >> 1;                       // eixo da normal: 0=x 1=y 2=z
-                var t1 = ea === 0 ? 1 : 0, t2 = ea === 2 ? 1 : 2;  // eixos tangentes
+                var d = q.dir, ea = d >> 1;
+                var t1 = ea === 0 ? 1 : 0, t2 = ea === 2 ? 1 : 2;
                 var pn = q.pos[0 * 3 + ea];
-                usaAO = (d & 1) ? pn >= SUB - 4 : pn <= 4;              // só faces rentes à borda da célula
+                usaAO = (d & 1) ? pn >= SUB - 4 : pn <= 4;
               }
               for (var v = 0; v < 4; v++) {
                 var f = 1;
@@ -434,9 +475,7 @@
                 var fr = f, fg = f, fb = f;
                 if (comAO && dest === S.opaco) {
                   var li = (!NOITE && q.lam > 0.04) ? luz(xl + q.pos[v * 3] / SUB, yr + q.pos[v * 3 + 1] / SUB + 0.03, zl + q.pos[v * 3 + 2] / SUB) : 0;
-                  // sombra fria e escura; luz quente e dourada (sol de outono)
                   if (NOITE) {
-                    // luar azulado + luz quente das lâmpadas
                     fr *= 0.30; fg *= 0.37; fb *= 0.58;
                     var vx = xl + q.pos[v * 3] / SUB, vy = yr + q.pos[v * 3 + 1] / SUB, vz = zl + q.pos[v * 3 + 2] / SUB;
                     var mx = 0, soma = 0, ar = 0, ag = 0, ab = 0;
@@ -453,23 +492,25 @@
                     var lamp = mx + 0.3 * (soma - mx), lcr = 1.15, lcg = 0.78, lcb = 0.38;
                     if (soma > 0) { lcr = ar / soma; lcg = ag / soma; lcb = ab / soma; }
                     if (lamp > 1) lamp = 1;
-                    if (emNivel[id]) { lamp = 1.6; var pc = emCor[id]; if (pc) { lcr = pc[0]; lcg = pc[1]; lcb = pc[2]; } }   // a própria lâmpada brilha
+                    if (emNivel[id]) { lamp = 1.6; var pc = emCor[id]; if (pc) { lcr = pc[0]; lcg = pc[1]; lcb = pc[2]; } }
                     fr += lamp * lcr; fg += lamp * lcg; fb += lamp * lcb;
                   } else {
-                    if (LUZ.pos === "o" || LUZ.pos === "s") { fr *= 0.50 + 0.82 * li; fg *= 0.58 + 0.40 * li; fb *= 0.80 - 0.15 * li; }   // pôr do sol: laranja dourado
-                    else if (LUZ.pos === "n" || LUZ.pos === "l") { fr *= 0.54 + 0.66 * li; fg *= 0.60 + 0.38 * li; fb *= 0.86 + 0.04 * li; }   // nascer do sol: rosa e dourado suave
-                    else { fr *= 0.51 + 0.74 * li; fg *= 0.59 + 0.42 * li; fb *= 0.82 - 0.10 * li; }   // sol de outono: dourado, na mesma família do nascer e do pôr
+                    if (LUZ.pos === "o" || LUZ.pos === "s") { fr *= 0.50 + 0.82 * li; fg *= 0.58 + 0.40 * li; fb *= 0.80 - 0.15 * li; }
+                    else if (LUZ.pos === "n" || LUZ.pos === "l") { fr *= 0.54 + 0.66 * li; fg *= 0.60 + 0.38 * li; fb *= 0.86 + 0.04 * li; }
+                    else { fr *= 0.56 + 0.62 * li; fg *= 0.66 + 0.44 * li; fb *= 0.80 + 0.06 * li; }
                   }
                 }
                 if (NOITE && dest !== S.opaco) { fr *= 0.28; fg *= 0.34; fb *= 0.55; }
+                if (jan) { fr = jan[0] * jan[3]; fg = jan[1] * jan[3]; fb = jan[2] * jan[3]; cr = cg = cb = 1; }
                 var A8 = 255, R8 = Math.min(255, (cr * fr * 255 + 0.5) | 0), G8 = Math.min(255, (cg * fg * 255 + 0.5) | 0), B8 = Math.min(255, (cb * fb * 255 + 0.5) | 0);
                 var ya = 1;
-                if (ond) {                                           // amplitude do vento (alfa 0..255 = 0..0.16 bloco)
+                if (ond) {
                   var hy = Math.min(1, Math.max(0, q.pos[v * 3 + 1] / SUB));
                   ya = ond === 1 ? 1.0 : ond === 3 ? 0.5 * (1 - hy) : (meia > 0 ? 0.5 + 0.5 * hy : meia < 0 ? 0.5 * hy : hy) * 0.9;
                   if (ond === 2 && ya < 0.02) ya = 0.0;
                   A8 = (ya * 255 + 0.5) | 0;
-                } else A8 = alfa;
+                  if (neveAqui) A8 = 244;
+                } else A8 = jan ? 250 : (neveAqui ? 244 : (pocaAqui ? 238 : alfa));
                 var o = (nv + v) * 8, ob = (nv + v) * 16 + 12;
                 u16[o] = bx + q.pos[v * 3];
                 u16[o + 1] = by + q.pos[v * 3 + 1];
@@ -492,13 +533,10 @@
     return c;
   }
 
-  /* ---------- LOD: pilares em baixa resolução ---------- */
-
-  /* Cor média (r,g,b) de cada tipo de bloco, vista de cima. rgba = pixels do atlas (largura = atlas.largura) */
   function calcularCores(scan, rgba) {
     var cab = scan.cab, at = cab.atlas, W = at.largura, pal = cab.paleta;
-    var tintas = {};
-    for (var k in cab.tintas) tintas[k] = hexRGB(cab.tintas[k]);
+    scan._rgba = rgba;
+    var tintas = tintasDe(cab), neve = cobertura() > 0.5;
     var medias = {};
     function media(t) {
       if (medias[t]) return medias[t];
@@ -528,12 +566,14 @@
       cor[id * 3] = Math.min(255, m[0] * f[0]);
       cor[id * 3 + 1] = Math.min(255, m[1] * f[1]);
       cor[id * 3 + 2] = Math.min(255, m[2] * f[2]);
+      if (neve && !(cab.paleta[id].f & F_TRANSLUC) && !/lava|fire|magma|lamp|lantern|torch|glow/.test(p.n || "")) {
+        cor[id * 3] = cor[id * 3] * 0.35 + 238 * 0.65; cor[id * 3 + 1] = cor[id * 3 + 1] * 0.35 + 243 * 0.65; cor[id * 3 + 2] = cor[id * 3 + 2] * 0.35 + 250 * 0.65;
+      }
     }
     scan.corId = cor;
     return cor;
   }
 
-  /* Agrupa as colunas em blocos de g×g (g = 4, 16...): altura máxima e cor média do topo */
   function construirGrupos(scan, g) {
     indexar(scan);
     if (scan._grupos[g]) return scan._grupos[g];
@@ -562,16 +602,15 @@
     return (scan._grupos[g] = { g: g, gw: gw, gd: gd, alt: alt, cor: cm });
   }
 
-  var REGIAO = 32;   // grupos por lado em cada malha grossa
+  var REGIAO = 32;
 
-  /* Malha grossa de uma região (rx, rz) de 32×32 grupos */
   function malhaGrossa(scan, cam, gr, rx, rz, S) {
     S.limpar();
     var cc = baseCamera(cam), sx = cc.sx, sz = cc.sz, g = gr.g, gw = gr.gw, gd = gr.gd;
     var Wx = scan.Wx, Dz = scan.Dz;
     var gx0 = rx * REGIAO, gz0 = rz * REGIAO, gx1 = Math.min(gw, gx0 + REGIAO), gz1 = Math.min(gd, gz0 + REGIAO);
     var ox = gx0 * g, oz = gz0 * g;
-    function quad(p, R, G, B) {                     // p = 4 vértices [x,y,z] em blocos, relativos a (ox,0,oz)
+    function quad(p, R, G, B) {
       S.garantir(4);
       var u16 = S.u16, u8 = S.u8, nv = S.nv;
       for (var v = 0; v < 4; v++) {
@@ -596,12 +635,12 @@
         var R = gr.cor[gi * 3], G = gr.cor[gi * 3 + 1], B = gr.cor[gi * 3 + 2];
         quad([[xa, top, za], [xa, top, zb], [xb, top, zb], [xb, top, za]], R, G, B);
         var bx = Math.max(0, alturaDe(gx + sx, gz) + 1);
-        if (bx < top) {                              // lado voltado para +x ou -x
+        if (bx < top) {
           var xs = sx > 0 ? xb : xa;
           quad([[xs, top, za], [xs, bx, za], [xs, bx, zb], [xs, top, zb]], (R * 0.6) | 0, (G * 0.6) | 0, (B * 0.6) | 0);
         }
         var bz = Math.max(0, alturaDe(gx, gz + sz) + 1);
-        if (bz < top) {                              // lado voltado para +z ou -z
+        if (bz < top) {
           var zs = sz > 0 ? zb : za;
           quad([[xa, top, zs], [xa, bz, zs], [xb, bz, zs], [xb, top, zs]], (R * 0.8) | 0, (G * 0.8) | 0, (B * 0.8) | 0);
         }
@@ -614,7 +653,7 @@
     carregar: carregar, decodificar: decodificar, percorrer: percorrer, indexar: indexar,
     baseCamera: baseCamera, horizonte: horizonte, contexto: contexto, Saida: Saida,
     configLuz: configLuz, calcularCores: calcularCores, construirGrupos: construirGrupos, malhaGrossa: malhaGrossa,
-    REGIAO: REGIAO, BIAS: BIAS, retanguloTextura: retanguloTextura, SUB: SUB
+    REGIAO: REGIAO, NOMES_TERMOS: NOMES_TERMOS, BIAS: BIAS, retanguloTextura: retanguloTextura, SUB: SUB
   };
   if (typeof module !== "undefined" && module.exports) module.exports = McScan;
   else raiz.McScan = McScan;

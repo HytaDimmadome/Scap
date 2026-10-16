@@ -8,6 +8,7 @@
   @font-face { font-family: "Inter"; font-weight: 400; src: url("fonts/Inter-Regular.ttf"); }
   @font-face { font-family: "Inter"; font-weight: 600; src: url("fonts/Inter-SemiBold.ttf"); }
   @font-face { font-family: "Inter"; font-weight: 700; src: url("fonts/Inter-Bold.ttf"); }
+  @font-face { font-family: "Damion"; src: url("fonts/Damion-Regular.ttf"); }
   :root { --fundo: #0B1F16; --verde: #0B4B33; --creme: #F8EBD3; --claro: #FCF4E3; --borda: #E3D0AE; --texto: #0B4B33;
     --suave: #5C7A6B; --vermelho: #E01A13; --noite: #1B2A5C; }
   * { box-sizing: border-box; }
@@ -25,18 +26,47 @@
   input[type=file] { display: none; }
   #info { margin-left: auto; color: var(--verde); background: var(--claro); border: 2px solid var(--borda);
     border-radius: 12px; padding: 7px 13px; max-width: 100%; }
-  .luz { position: fixed; left: 16px; bottom: 16px; background: var(--claro); border: 2px solid var(--borda); border-radius: 18px;
-    padding: 12px 14px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; max-width: calc(100% - 32px); }
-  .luz .rosa { display: grid; grid-template-columns: repeat(3, 34px); gap: 4px; }
-  .luz .dn { display: flex; flex-direction: column; gap: 6px; }
-  .luz .rosa button { padding: 0; height: 34px; font-size: 16px; border-radius: 10px; }
+  #btnMenu { position: fixed; left: 16px; bottom: 16px; z-index: 6; width: 44px; height: 44px; padding: 0; border-radius: 50%; display: grid; place-items: center; }
+  #btnMenu svg { width: 22px; height: 22px; }
+  #btnMenu.on { background: var(--verde); color: var(--creme); }
+  .luz { position: fixed; left: 16px; bottom: 70px; z-index: 5; background: var(--claro); border: 2px solid var(--borda); border-radius: 18px;
+    padding: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.25); max-width: calc(100% - 32px); transform-origin: 0 100%; animation: abre .16s ease-out; }
+  @keyframes abre { from { opacity: 0; transform: translateY(6px) scale(.97); } to { opacity: 1; transform: none; } }
+  .luz.escondido { display: none; }
+  .luz .pag { display: none; flex-direction: column; gap: 10px; }
+  .luz[data-pag="inicio"] .pag.inicio, .luz[data-pag="sol"] .pag.sol, .luz[data-pag="mundo"] .pag.mundo, .luz[data-pag="estacoes"] .pag.estacoes { display: flex; }
+  .luz .pag.inicio { flex-direction: row; gap: 6px; }
+  .luz .tile { display: flex; flex-direction: column; align-items: center; gap: 5px; width: 76px; padding: 10px 4px 8px; border-radius: 14px; font-size: 12px; }
+  .luz .tile svg { width: 24px; height: 24px; }
+  .luz .cab { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--texto); }
+  .luz .voltar { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border-radius: 10px; }
+  .luz .voltar svg { width: 16px; height: 16px; }
+  .luz .rosa { display: grid; grid-template-columns: repeat(3, 34px); gap: 4px; justify-content: center; }
+  .luz .dn { display: flex; gap: 6px; }
+  .luz .dn.col { flex-direction: column; }
+  .luz .rosa button { padding: 0; height: 34px; font-size: 13px; border-radius: 10px; }
   .luz .rosa button.on { background: var(--vermelho); border-color: var(--vermelho); color: #fff; }
-  .luz .rosa button { font-size: 13px; }
   .luz label { display: flex; flex-direction: column; gap: 3px; color: var(--suave); font-size: 12px; }
-  .luz input[type=range] { width: 120px; accent-color: var(--verde); }
+  .luz input[type=range] { width: 100%; accent-color: var(--verde); }
   .luz button.on { background: var(--verde); color: var(--creme); }
   .luz #btnNoite.on { background: var(--noite); border-color: var(--noite); color: #FFF5DB; }
+  .luz .dn button { flex: 1; padding: 6px 10px; font-size: 12px; border-radius: 10px; }
+  .luz small { color: var(--suave); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+  .luz .fila { display: flex; gap: 4px; flex-wrap: wrap; width: 224px; }
+  .luz .fila button { padding: 5px 9px; font-size: 12px; border-radius: 9px; }
+  .luz label.termo { gap: 4px; color: var(--texto); font-size: 12px; font-weight: 700; width: 224px; }
+  .luz .pag.sol, .luz .pag.mundo, .luz .pag.estacoes { min-width: 224px; }
   #aviso { position: fixed; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; pointer-events: none; }
+  .menu { position: fixed; z-index: 5; background: var(--claro); border: 2px solid var(--borda); border-radius: 16px; padding: 8px;
+    display: flex; flex-direction: column; gap: 4px; min-width: 270px; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+  .menu.escondido, #progresso.escondido { display: none; }
+  .menu button { text-align: left; border-color: transparent; background: transparent; }
+  .menu button:hover { background: var(--creme); border-color: var(--borda); }
+  .menu .marca { display: flex; gap: 8px; align-items: center; padding: 8px 12px 4px; color: var(--suave); font-weight: 400; cursor: pointer;
+    border-top: 1px solid var(--borda); margin-top: 4px; }
+  .menu .marca input { accent-color: var(--verde); }
+  #progresso { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 6; background: var(--claro);
+    border: 2px solid var(--verde); border-radius: 16px; padding: 10px 14px; display: flex; gap: 14px; align-items: center; }
   #aviso div { background: var(--claro); border: 2px solid var(--borda); border-radius: 18px; padding: 20px 24px; max-width: 460px; }
   #aviso.escondido { display: none; }
   #aviso p { margin: 6px 0 0; color: var(--suave); font-weight: 400; }
@@ -50,22 +80,54 @@
   <button id="girarEsq" title="Girar para a esquerda">⟲</button>
   <button id="girarDir" title="Girar para a direita">⟳</button>
   <button id="recentrar" title="Enquadrar a cidade">Enquadrar</button>
+  <button id="btnExportar" title="Salvar imagem, vídeo ou página para compartilhar">Exportar ▾</button>
   <span id="info"></span>
 </div>
-<div class="luz" id="luz">
-  <div class="rosa" title="De que lado vem o sol">
-    <span></span><button data-pos="n" title="Nascer do sol (norte)">N</button><span></span>
-    <button data-pos="o" title="Pôr do sol (oeste)">O</button><button data-pos="" class="centro" title="Sol de outono (padrão)">☀</button><button data-pos="l" title="Nascer do sol (leste)">L</button>
-    <span></span><button data-pos="s" title="Pôr do sol (sul)">S</button><span></span>
+<div class="menu escondido" id="menuExportar">
+  <button data-ac="img">📷 Imagem da tela atual (PNG)</button>
+  <button data-ac="img-mapa">🗺 Imagem do mapa inteiro (PNG)</button>
+  <button data-ac="vid-dia">🎬 Vídeo: ciclo do dia (WebM)</button>
+  <button data-ac="vid-giro">🎬 Vídeo: volta pelos 4 cantos (WebM)</button>
+  <button data-ac="html" id="acHtml">🌐 Página HTML para compartilhar</button>
+  <label class="marca"><input type="checkbox" id="chkMarca" checked> Incluir a marca do Scap</label>
+</div>
+<div id="progresso" class="escondido"><span id="progTexto"></span><button id="progCancelar">Cancelar</button></div>
+<button id="btnMenu" title="Sol, mundo e estações"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg></button>
+<div class="luz escondido" id="luz" data-pag="inicio">
+  <div class="pag inicio">
+    <button class="tile" data-ir="sol"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.9 1.9M16.8 16.8l1.9 1.9M18.7 5.3l-1.9 1.9M7.2 16.8l-1.9 1.9"/></svg><span>Sol</span></button>
+    <button class="tile" data-ir="mundo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17.5h9.5a3.7 3.7 0 0 0 .5-7.4 5.2 5.2 0 0 0-10-1A4.2 4.2 0 0 0 7 17.5z"/><path d="M9 21l1-2M13 21l1-2"/></svg><span>Mundo</span></button>
+    <button class="tile" data-ir="estacoes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19C5 10 10 5 20 4c0 10-4 15-13 15"/><path d="M5 19c3-4 6-7 10-9"/></svg><span>Estações</span></button>
   </div>
-  <div class="dn">
-    <button id="btnDia" class="on">☀ Dia</button><button id="btnNoite" class="noite">🌙 Noite</button>
+  <div class="pag sol">
+    <div class="cab"><button class="voltar" title="Voltar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button><span>Sol</span></div>
+    <div class="rosa" title="De que lado vem o sol">
+      <span></span><button data-pos="n" title="Nascer do sol (norte)">N</button><span></span>
+      <button data-pos="o" title="Pôr do sol (oeste)">O</button><button data-pos="" class="centro" title="Sol do meio-dia (padrão)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.9 1.9M16.8 16.8l1.9 1.9M18.7 5.3l-1.9 1.9M7.2 16.8l-1.9 1.9"/></svg></button><button data-pos="l" title="Nascer do sol (leste)">L</button>
+      <span></span><button data-pos="s" title="Pôr do sol (sul)">S</button><span></span>
+    </div>
+    <div class="dn"><button id="btnDia" class="on">Dia</button><button id="btnNoite" class="noite">Noite</button></div>
   </div>
-  <div class="dn">
-    <button id="animBtn" class="on" style="display:none" title="Água, lava, fogo e outras texturas em movimento">🌊 Animações</button>
-    <button id="fxVento" class="on" title="Folhas e plantas balançando">🍃 Vento</button>
-    <button id="fxNevoa" class="on" title="Neblina de profundidade e céu em degradê">☁ Névoa</button>
-    <button id="fxBrilho" class="on" title="Brilho das luzes à noite">✨ Brilho</button>
+  <div class="pag mundo">
+    <div class="cab"><button class="voltar" title="Voltar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button><span>Mundo</span></div>
+    <small>Tempo</small>
+    <div class="fila" id="grpTempo">
+      <button data-v="" class="on">Limpo</button><button data-v="chuva" title="Chuva, chão molhado e poças">Chuva</button><button data-v="neve">Neve</button>
+    </div>
+    <small>Efeitos</small>
+    <div class="fila">
+      <button id="animBtn" class="on" style="display:none" title="Água, lava, fogo e outras texturas em movimento">Animações</button>
+      <button id="fxVento" class="on" title="Folhas e plantas balançando">Vento</button>
+      <button id="fxNevoa" class="on" title="Neblina de profundidade e céu em degradê">Névoa</button>
+      <button id="fxBrilho" class="on" title="Brilho das luzes à noite">Brilho</button>
+    </div>
+  </div>
+  <div class="pag estacoes">
+    <div class="cab"><button class="voltar" title="Voltar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button><span>Estações</span></div>
+    <div class="fila" id="grpEstacao">
+      <button data-v="-1" class="on" title="Cores do mundo como foi escaneado">Original</button><button data-v="3">Primavera</button><button data-v="9">Verão</button><button data-v="15">Outono</button><button data-v="21" title="Neve cobrindo os topos">Inverno</button>
+    </div>
+    <label class="termo" id="boxTermo" style="display:none"><span id="nomeTermo"></span><input type="range" id="termo" min="0" max="23" step="1" value="3"></label>
   </div>
 </div>
 <div id="aviso"><div><strong id="avisoTitulo">Carregando…</strong><p id="avisoTexto"></p></div></div>
@@ -73,13 +135,11 @@
 <script src="mcscan_leitor.js"></script>
 <script src="mcscan_visualizador.js"></script>
 <script>
-  // não deixa os botões ficarem com foco (o foco fazia a janela embutida deslocar)
   document.addEventListener("click", function (e) { var t = e.target; if (t && t.tagName === "BUTTON") t.blur(); });
   document.addEventListener("pointerup", function (e) { var t = e.target; if (t && t.tagName === "INPUT" && t.type === "range") setTimeout(function () { t.blur(); }, 0); });
   window.addEventListener("scroll", function () { window.scrollTo(0, 0); });
-  // Padrão: carrega "cidade.scap" da mesma pasta. Outro arquivo: visualizador.html?arquivo=nome.scap
   var ARQUIVO_PADRAO = new URLSearchParams(location.search).get("arquivo") || "cidade.scap";
-  var canvas = document.getElementById("mapa"), vista = null;
+  var canvas = document.getElementById("mapa"), vista = null, scanAtual = null;
   var aviso = document.getElementById("aviso");
 
   function mostrar(titulo, texto, erro) {
@@ -94,6 +154,7 @@
       mostrar("Carregando a cidade…", "Baixando e descompactando. Em cidades grandes isso leva alguns segundos.");
       await new Promise(function (r) { setTimeout(r, 30); });
       var scan = await scanPromessa;
+      scanAtual = scan;
       mostrar("Preparando o mapa…", "Organizando " + (scan.cab.n_runs || 0).toLocaleString("pt-BR") + " trechos de blocos.");
       await new Promise(function (r) { setTimeout(r, 30); });
       var a = scan.cab.area;
@@ -134,11 +195,18 @@
   document.getElementById("girarEsq").onclick = function () { if (vista) vista.girar(-1); };
   document.getElementById("girarDir").onclick = function () { if (vista) vista.girar(1); };
   document.getElementById("recentrar").onclick = function () { if (vista) vista.recentrar(); };
-  var luzCfg = { pos: "", noite: 0 }, luzTimer = 0;
+  var luzCfg = { pos: "", noite: 0, termo: -1, tempo: "" }, luzTimer = 0;
   function aplicarLuz() {
     if (!vista) return;
     clearTimeout(luzTimer);
-    luzTimer = setTimeout(function () { vista.luz({ pos: luzCfg.pos, noite: luzCfg.noite, az: 38, elev: 30 }); }, 0);
+    luzTimer = setTimeout(function () { vista.luz({ pos: luzCfg.pos, noite: luzCfg.noite, az: 38, elev: 30, termo: luzCfg.termo, tempo: luzCfg.tempo }); }, 0);
+    document.querySelectorAll("#grpEstacao button").forEach(function (b) {
+      var t = +b.dataset.v;
+      b.classList.toggle("on", t < 0 ? luzCfg.termo < 0 : (luzCfg.termo >= 0 && Math.floor(luzCfg.termo / 6) === Math.floor(t / 6)));
+    });
+    document.querySelectorAll("#grpTempo button").forEach(function (b) { b.classList.toggle("on", b.dataset.v === luzCfg.tempo); });
+    var caixa = document.getElementById("boxTermo"); caixa.style.display = luzCfg.termo >= 0 ? "" : "none";
+    if (luzCfg.termo >= 0) { document.getElementById("termo").value = luzCfg.termo; document.getElementById("nomeTermo").textContent = McScan.NOMES_TERMOS[luzCfg.termo]; }
     document.querySelectorAll(".rosa button").forEach(function (b) { b.classList.toggle("on", b.dataset.pos === luzCfg.pos); });
     document.getElementById("btnDia").classList.toggle("on", !luzCfg.noite);
     document.getElementById("btnNoite").classList.toggle("on", !!luzCfg.noite);
@@ -146,9 +214,210 @@
   document.querySelectorAll(".rosa button").forEach(function (b) {
     b.onclick = function () { luzCfg.pos = b.dataset.pos; aplicarLuz(); };
   });
+  document.querySelectorAll("#grpEstacao button").forEach(function (b) { b.onclick = function () { luzCfg.termo = +b.dataset.v; aplicarLuz(); }; });
+  document.querySelectorAll("#grpTempo button").forEach(function (b) { b.onclick = function () { luzCfg.tempo = b.dataset.v; aplicarLuz(); }; });
+  document.getElementById("termo").oninput = function () { document.getElementById("nomeTermo").textContent = McScan.NOMES_TERMOS[+this.value]; };
+  document.getElementById("termo").onchange = function () { luzCfg.termo = +this.value; aplicarLuz(); };
   document.getElementById("btnDia").onclick = function () { luzCfg.noite = 0; aplicarLuz(); };
   document.getElementById("btnNoite").onclick = function () { luzCfg.noite = 1; aplicarLuz(); };
   document.querySelector('.rosa button[data-pos=""]').classList.add("on");
+  var painel = document.getElementById("luz"), btnMenu = document.getElementById("btnMenu");
+  function irPara(pag) { painel.dataset.pag = pag; }
+  btnMenu.onclick = function () {
+    var abrir = painel.classList.contains("escondido");
+    painel.classList.toggle("escondido", !abrir); btnMenu.classList.toggle("on", abrir);
+    if (abrir) irPara("inicio");
+  };
+  document.querySelectorAll("#luz .tile").forEach(function (b) { b.onclick = function () { irPara(b.dataset.ir); }; });
+  document.querySelectorAll("#luz .voltar").forEach(function (b) { b.onclick = function () { irPara("inicio"); }; });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !painel.classList.contains("escondido")) { if (painel.dataset.pag !== "inicio") irPara("inicio"); else btnMenu.onclick(); } });
+
+  var exportando = false, cancelarExp = false;
+  var menuExp = document.getElementById("menuExportar"), btnExp = document.getElementById("btnExportar");
+  function marcaLigada() { return document.getElementById("chkMarca").checked; }
+  function agora() { var d = new Date(), z = function (n) { return (n < 10 ? "0" : "") + n; };
+    return d.getFullYear() + z(d.getMonth() + 1) + z(d.getDate()) + "-" + z(d.getHours()) + z(d.getMinutes()); }
+  function esperar(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function fecharMenu() { menuExp.classList.add("escondido"); }
+  btnExp.onclick = function (e) {
+    e.stopPropagation();
+    if (!menuExp.classList.contains("escondido")) { fecharMenu(); return; }
+    var r = btnExp.getBoundingClientRect();
+    menuExp.style.left = Math.max(8, Math.min(r.left, innerWidth - 290)) + "px";
+    menuExp.style.top = (r.bottom + 8) + "px";
+    menuExp.classList.remove("escondido");
+  };
+  document.addEventListener("click", function (e) { if (!menuExp.contains(e.target) && e.target !== btnExp) fecharMenu(); });
+
+  function progresso(texto) {
+    var p = document.getElementById("progresso");
+    if (texto == null) { p.classList.add("escondido"); return; }
+    document.getElementById("progTexto").textContent = texto;
+    p.classList.remove("escondido");
+  }
+  document.getElementById("progCancelar").onclick = function () { cancelarExp = true; progresso("Cancelando…"); };
+
+  async function comProgresso(texto, fn) {
+    if (!vista || exportando) return;
+    exportando = true; cancelarExp = false; fecharMenu(); progresso(texto);
+    try { await fn(); }
+    catch (e) {
+      if (!(e && e.message === "cancelado")) { console.error(e); mostrar("Não consegui exportar", (e && e.message) || String(e), true); setTimeout(esconder, 5000); }
+    } finally { exportando = false; progresso(null); }
+  }
+
+  function blobB64(blob) {
+    return new Promise(function (ok, erro) {
+      var r = new FileReader();
+      r.onload = function () { ok(String(r.result).split(",")[1] || ""); };
+      r.onerror = function () { erro(new Error("leitura do arquivo")); };
+      r.readAsDataURL(blob);
+    });
+  }
+  async function salvarArquivo(nome, blob, descricao) {
+    var api = window.pywebview && window.pywebview.api;
+    if (api && api.salvar_abrir) {
+      var ok = await api.salvar_abrir(nome, descricao);
+      if (!ok) return false;
+      for (var i = 0; i < blob.size; i += 786432) await api.salvar_pedaco(await blobB64(blob.slice(i, i + 786432)));
+      await api.salvar_fechar();
+      return true;
+    }
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = nome; document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+    return true;
+  }
+
+  async function desenharMarca(c) {
+    try { await document.fonts.load("40px Damion"); await document.fonts.load("700 20px Inter"); } catch (e) {}
+    var x = c.getContext("2d"), u = Math.max(c.width, c.height) * 0.028, W = c.width, H = c.height;
+    x.save(); x.textAlign = "right"; x.textBaseline = "alphabetic";
+    x.shadowColor = "rgba(0,0,0,.35)"; x.shadowBlur = u * 0.3; x.fillStyle = "rgba(252,244,227,.94)";
+    x.font = (u * 1.9) + "px Damion, cursive"; x.fillText("Scap", W - u * 0.9, H - u * 1.6);
+    x.font = "700 " + (u * 0.62) + "px Inter, system-ui, sans-serif"; x.fillText("by Essie N Pierot", W - u * 0.9, H - u * 0.75);
+    x.restore();
+  }
+
+  async function exportarImagem(inteiro) {
+    await comProgresso("Gerando a imagem…", async function () {
+      var W, H;
+      if (inteiro) {
+        var r = vista.proporcaoMapa(), L = 4096;
+        if (r >= 1) { W = L; H = Math.round(L / r); } else { H = L; W = Math.round(L * r); }
+      } else { W = Math.round(canvas.clientWidth * 2); H = Math.round(canvas.clientHeight * 2); }
+      var c = await vista.capturar({ largura: W, altura: H, inteiro: inteiro, cancelado: function () { return cancelarExp; } });
+      if (marcaLigada()) await desenharMarca(c);
+      var blob = await new Promise(function (r) { c.toBlob(r, "image/png"); });
+      progresso("Salvando…");
+      await salvarArquivo("scap-" + (inteiro ? "mapa-" : "") + agora() + ".png", blob, "Imagem PNG (*.png)");
+    });
+  }
+
+  async function gravarVideo(quadros, segundos, fade) {
+    var W = quadros[0].width, H = quadros[0].height, cv = document.createElement("canvas");
+    cv.width = W; cv.height = H;
+    var cx = cv.getContext("2d"), tipos = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+    var tipo = tipos.filter(function (t) { return MediaRecorder.isTypeSupported(t); })[0];
+    if (!tipo) throw new Error("Este navegador não sabe gravar vídeo.");
+    var rec = new MediaRecorder(cv.captureStream(30), { mimeType: tipo, videoBitsPerSecond: 9000000 }), partes = [];
+    rec.ondataavailable = function (e) { if (e.data && e.data.size) partes.push(e.data); };
+    var fim = new Promise(function (r) { rec.onstop = r; });
+    var n = quadros.length, seg = segundos / n, t0 = 0;
+    function suave(t) { return t * t * (3 - 2 * t); }
+    function desenhar(t) {
+      var p = t / seg, i = Math.floor(p) % n, f = p - Math.floor(p), k = (f - (1 - fade)) / fade;
+      cx.globalAlpha = 1; cx.drawImage(quadros[i], 0, 0);
+      if (k > 0) { cx.globalAlpha = suave(Math.min(1, k)); cx.drawImage(quadros[(i + 1) % n], 0, 0); cx.globalAlpha = 1; }
+    }
+    desenhar(0); rec.start(250); t0 = performance.now();
+    await new Promise(function (ok) {
+      (function passo() {
+        var t = (performance.now() - t0) / 1000;
+        if (cancelarExp || t >= segundos) { ok(); return; }
+        desenhar(t);
+        progresso("Gravando o vídeo… " + Math.round(100 * t / segundos) + "%");
+        requestAnimationFrame(passo);
+      })();
+    });
+    rec.stop(); await fim;
+    if (cancelarExp) throw new Error("cancelado");
+    return { blob: new Blob(partes, { type: tipo.split(";")[0] }), ext: tipo.indexOf("mp4") >= 0 ? "mp4" : "webm" };
+  }
+
+  async function exportarVideo(modo) {
+    if (typeof MediaRecorder === "undefined") { mostrar("Sem suporte a vídeo", "Este navegador não sabe gravar vídeo.", true); setTimeout(esconder, 4000); return; }
+    await comProgresso("Preparando o vídeo…", async function () {
+      var W = 1280, H = Math.max(2, Math.round(W * canvas.clientHeight / Math.max(1, canvas.clientWidth)) & ~1);
+      var est = vista.estado, salvo = { cam: est.camera, zoom: est.zoom, x: est.panX, y: est.panY };
+      var quadros = [];
+      async function foto(inteiro, i, total) {
+        progresso("Preparando o vídeo… " + (i + 1) + " de " + total);
+        var c = await vista.capturar({ largura: W, altura: H, inteiro: inteiro, cancelado: function () { return cancelarExp; } });
+        if (marcaLigada()) await desenharMarca(c);
+        quadros.push(c);
+      }
+      try {
+        if (modo === "dia") {
+          var passos = [{ pos: "l", noite: 0 }, { pos: "", noite: 0 }, { pos: "o", noite: 0 }, { pos: "", noite: 1 }];
+          for (var i = 0; i < passos.length; i++) {
+            vista.luz({ pos: passos[i].pos, noite: passos[i].noite, az: 38, elev: 30 });
+            await foto(false, i, passos.length);
+          }
+        } else {
+          for (var k = 0; k < 4; k++) { await foto(true, k, 4); vista.girar(1); }
+        }
+      } finally {
+        if (modo === "dia") vista.luz({ pos: luzCfg.pos, noite: luzCfg.noite, az: 38, elev: 30 });
+        else { while (est.camera !== salvo.cam) vista.girar(1); }
+        est.zoom = salvo.zoom; est.panX = salvo.x; est.panY = salvo.y; vista.redesenhar();
+      }
+      var v = await gravarVideo(quadros, modo === "dia" ? 14 : 12, 0.35);
+      progresso("Salvando…");
+      await salvarArquivo("scap-" + (modo === "dia" ? "ciclo-do-dia-" : "volta-") + agora() + "." + v.ext, v.blob, v.ext === "mp4" ? "Vídeo MP4 (*.mp4)" : "Vídeo WebM (*.webm)");
+    });
+  }
+
+  async function exportarHTML() {
+    await comProgresso("Montando a página…", async function () {
+      async function ler(n, bin) {
+        var api = window.pywebview && window.pywebview.api, buf = null;
+        if (api && api.ler_recurso) {
+          try { var b64 = await api.ler_recurso(n); if (b64) { var bs = atob(b64), u = new Uint8Array(bs.length); for (var i = 0; i < bs.length; i++) u[i] = bs.charCodeAt(i); buf = u.buffer; } } catch (e) {}
+        }
+        if (!buf) {
+          try { var r = await fetch(new URL(n, location.href)); if (!r.ok) throw new Error("http " + r.status); buf = await r.arrayBuffer(); }
+          catch (e) { throw new Error("Não consegui ler " + n + " (abra o mapa pelo app ou por um servidor, não direto do arquivo)"); }
+        }
+        return bin ? buf : new TextDecoder("utf-8").decode(buf);
+      }
+      var html = await ler("visualizador.html"), leitor = await ler("mcscan_leitor.js"), vis = await ler("mcscan_visualizador.js");
+      var fonte = await blobB64(new Blob([await ler("fonts/Damion-Regular.ttf", true)]));
+      var dados = await blobB64(new Blob([scanAtual.bruto]));
+      function js(t) { return "<script>" + t.replace(/<\/script/gi, "<\\/script") + "<\/script>"; }
+      var fimEstilo = html.indexOf("</" + "style>");
+      html = html.slice(0, fimEstilo).replace(/@font-face\s*\{[^}]*\}\s*/g, "") + html.slice(fimEstilo);
+      html = html
+        .replace("<style>", function () { return '<style>\n  @font-face { font-family: "Damion"; src: url(data:font/ttf;base64,' + fonte + "); }"; })
+        .replace(/<title>[^<]*<\/title>/, "<title>Mapa — Scap</title>")
+        .replace('<script src="mcscan_leitor.js"><' + '/script>', function () { return '<script>window.SCAP_EMBUTIDO="' + dados + '";window.SCAP_LUZ=' + JSON.stringify(luzCfg) + ';<\/script>\n' + js(leitor); })
+        .replace('<script src="mcscan_visualizador.js"><' + '/script>', function () { return js(vis); });
+      progresso("Salvando…");
+      await salvarArquivo("scap-mapa-" + agora() + ".html", new Blob([html], { type: "text/html" }), "Página HTML (*.html)");
+    });
+  }
+
+  menuExp.addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-ac]");
+    if (!b) return;
+    var ac = b.dataset.ac;
+    if (ac === "img") exportarImagem(false);
+    else if (ac === "img-mapa") exportarImagem(true);
+    else if (ac === "vid-dia") exportarVideo("dia");
+    else if (ac === "vid-giro") exportarVideo("giro");
+    else if (ac === "html") exportarHTML();
+  });
+
   window.addEventListener("dragover", function (e) { e.preventDefault(); });
   window.addEventListener("drop", function (e) {
     e.preventDefault();
@@ -156,7 +425,17 @@
     if (f) abrir(f.arrayBuffer().then(McScan.decodificar));
   });
 
-  if (location.protocol === "file:") {
+  if (window.SCAP_EMBUTIDO) {
+    document.getElementById("acHtml").style.display = "none";
+    abrir(Promise.resolve().then(function () {
+      var bin = atob(window.SCAP_EMBUTIDO), u8 = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      window.SCAP_EMBUTIDO = null;
+      return McScan.decodificar(u8.buffer);
+    })).then(function () {
+      if (window.SCAP_LUZ) { Object.keys(window.SCAP_LUZ).forEach(function (k) { luzCfg[k] = window.SCAP_LUZ[k]; }); aplicarLuz(); }
+    });
+  } else if (location.protocol === "file:") {
     mostrar("Escolha o arquivo", "Abra o arquivo .scap pelo botão (ou arraste para cá). Para carregar sozinho, a página precisa estar num servidor.");
   } else {
     abrir(McScan.carregar(ARQUIVO_PADRAO));

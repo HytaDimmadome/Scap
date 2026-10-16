@@ -1,24 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Scap
-==========
-Escaneia uma área de um mundo de Minecraft Java (1.18+, inclusive Forge 1.20.1
-com mods) e gera um arquivo .scap compacto, feito para ser lido por uma
-página HTML (veja mcscan_leitor.js).
-
-O que é guardado: só a "casca" da cidade, isto é, os blocos que encostam em ar
-(ou em algo transparente). Terra, pedra e blocos maciços enterrados ficam de
-fora. Os interiores das construções entram sozinhos, porque paredes e chão de
-dentro encostam em ar.
-
-Uso com janela:   python mcscan.py
-Uso por terminal: python mcscan.py --mundo PASTA --x1 0 --z1 0 --x2 500 --z2 500
-                                   --ymin 60 --ymax 140 --saida cidade.scap
-
-Requer: Python 3.9+ e numpy (pip install numpy). A janela usa tkinter, que já
-vem com o Python no Windows.
-"""
 import os
 import io
 import re
@@ -30,9 +9,7 @@ import math
 import zlib
 import zipfile
 import struct
-import queue
 import argparse
-import threading
 import colorsys
 import numpy as np
 from collections import OrderedDict, Counter
@@ -45,9 +22,6 @@ class Cancelado(Exception):
     pass
 
 
-# --------------------------------------------------------------------------
-# NBT (leitor mínimo, sem dependências)
-# --------------------------------------------------------------------------
 class _Leitor:
     __slots__ = ("b", "p")
 
@@ -144,9 +118,6 @@ def ler_nbt(b):
     return _ler_payload(r, t)
 
 
-# --------------------------------------------------------------------------
-# Arquivos de região (.mca)
-# --------------------------------------------------------------------------
 class PastaRegioes:
     def __init__(self, pasta):
         self.pasta = pasta
@@ -166,7 +137,6 @@ class PastaRegioes:
         return self._cache[k]
 
     def chunk(self, cx, cz):
-        """Devolve o NBT do chunk, ou None se não existir/não for legível."""
         dados = self._abrir(cx >> 5, cz >> 5)
         if dados is None:
             return None
@@ -187,14 +157,13 @@ class PastaRegioes:
             elif comp == 3:
                 raw = bruto
             else:
-                return None  # LZ4 e chunks externos (.mcc) não são suportados
+                return None
             return ler_nbt(raw)
         except Exception:
             return None
 
 
 def achar_dimensoes(pasta_mundo):
-    """Lista as dimensões (nome, pasta de regiões) encontradas no mundo."""
     pasta_mundo = os.path.abspath(pasta_mundo)
     if os.path.basename(pasta_mundo) == "region" and os.path.isdir(pasta_mundo):
         return [("Região", pasta_mundo)]
@@ -214,9 +183,6 @@ def achar_dimensoes(pasta_mundo):
     return [(n, p) for n, p in cand if os.path.isdir(p)]
 
 
-# --------------------------------------------------------------------------
-# Blocos: paleta e transparência
-# --------------------------------------------------------------------------
 AR = {"minecraft:air", "minecraft:cave_air", "minecraft:void_air",
       "minecraft:barrier", "minecraft:light", "minecraft:structure_void"}
 
@@ -246,8 +212,6 @@ EXATOS_TRANSP = {
 
 
 def e_transparente(nome):
-    """Heurística: o bloco deixa ver o que está atrás (ou não é um cubo cheio)?
-    Blocos desconhecidos de mods são tratados como opacos."""
     if nome in EXATOS_TRANSP:
         return True
     caminho = nome.split(":", 1)[-1]
@@ -270,13 +234,9 @@ def chave_bloco(entrada, guardar_estados):
     return nome
 
 
-# --------------------------------------------------------------------------
-# Recursos: jars do Minecraft, mods e resource packs (modelos e texturas)
-# --------------------------------------------------------------------------
 FACES = ("down", "up", "north", "south", "west", "east")
 DIR_VEC = {"down": (0, -1, 0), "up": (0, 1, 0), "north": (0, 0, -1),
            "south": (0, 0, 1), "west": (-1, 0, 0), "east": (1, 0, 0)}
-# Vértices de cada face na ordem do Minecraft (0 = mínimo, 1 = máximo em x, y, z)
 VERTS_FACE = {
     "down": ((0, 0, 1), (0, 0, 0), (1, 0, 0), (1, 0, 1)),
     "up": ((0, 1, 0), (0, 1, 1), (1, 1, 1), (1, 1, 0)),
@@ -285,9 +245,7 @@ VERTS_FACE = {
     "west": ((0, 1, 0), (0, 0, 0), (0, 0, 1), (0, 1, 1)),
     "east": ((1, 1, 1), (1, 0, 1), (1, 0, 0), (1, 1, 0)),
 }
-# Bits de "flags" de cada tipo de bloco no arquivo
 F_TRANSP, F_OPACO, F_TRANSLUC, F_AGUA, F_CULLSAME = 1, 2, 4, 8, 16
-# Cores de tinta (bioma planície) por código
 TINTAS = {"1": "91bd59", "2": "77ab2f", "3": "3f76e4", "4": "619961", "5": "80a755", "6": "208030"}
 
 
@@ -301,7 +259,7 @@ def _ns(ref, padrao="minecraft"):
 def _carregar_json(dados):
     try:
         return json.loads(dados.decode("utf-8-sig"))
-    except Exception:
+    except ValueError:
         pass
     try:
         t = dados.decode("utf-8-sig", "replace")
@@ -309,7 +267,7 @@ def _carregar_json(dados):
         t = re.sub(r'(^|[^:"\\])//[^\n]*', r"\1", t)
         t = re.sub(r",\s*([}\]])", r"\1", t)
         return json.loads(t)
-    except Exception:
+    except ValueError:
         return None
 
 
@@ -324,11 +282,10 @@ def _uv_padrao(face, f, t):
         return [f[0], 16 - t[1], t[0], 16 - f[1]]
     if face == "west":
         return [f[2], 16 - t[1], t[2], 16 - f[1]]
-    return [16 - t[2], 16 - t[1], 16 - f[2], 16 - f[1]]  # east
+    return [16 - t[2], 16 - t[1], 16 - f[2], 16 - f[1]]
 
 
 def _rot_elemento(p, rot):
-    """Rotação própria do elemento (regra da mão direita, como no jogo)."""
     o = rot.get("origin", [8, 8, 8])
     ang = float(rot.get("angle", 0))
     a = math.radians(ang)
@@ -356,7 +313,6 @@ def _rot_elemento(p, rot):
 
 
 def _rot_ponto(p, rx, ry):
-    """Rotação do blockstate ("x" depois "y"), em torno do centro do bloco."""
     x, y, z = p[0] - 8, p[1] - 8, p[2] - 8
     for _ in range((rx // 90) % 4):
         y, z = z, -y
@@ -375,8 +331,6 @@ def _rot_vetor(v, rx, ry):
 
 
 class Recursos:
-    """Lê os arquivos de assets dos jars (Minecraft, mods) e resource packs.
-    Prioridade: jar do Minecraft < mods < resource packs (o último vence)."""
 
     def __init__(self, jar_mc=None, pasta_mods=None, pacotes=(), avisos=None, excluir_mods=()):
         self.avisos = avisos if avisos is not None else []
@@ -434,7 +388,6 @@ class Recursos:
     def tem_fontes(self):
         return bool(self.indice)
 
-    # ---- acesso a arquivos ----
     def ler(self, caminho):
         e = self.indice.get(caminho)
         if e is None:
@@ -452,10 +405,10 @@ class Recursos:
                 _, velho = self._abertos.popitem(last=False)
                 try:
                     velho.close()
-                except Exception:
+                except OSError:
                     pass
             return z.read(nome)
-        except Exception:
+        except OSError:
             return None
 
     def json(self, caminho):
@@ -464,7 +417,6 @@ class Recursos:
             self._json[caminho] = _carregar_json(d) if d is not None else None
         return self._json[caminho]
 
-    # ---- blockstates ----
     def blockstate(self, nome):
         ns, p = _ns(nome)
         return self.json("assets/%s/blockstates/%s.json" % (ns, p))
@@ -508,9 +460,6 @@ class Recursos:
         return True
 
     def _variantes(self, nome, props, bucket=None):
-        """Lista de (modelo, x, y, uvlock) do blockstate para estas propriedades.
-        Quando o blockstate sorteia entre vários modelos (com 'weight'), bucket (0..BUCKETS-1) escolhe um
-        deles na proporção dos pesos; bucket=None pega o primeiro. self._alea diz se há sorteio de modelos."""
         bs = self.blockstate(nome)
         self._alea = False
         if not isinstance(bs, dict):
@@ -552,7 +501,6 @@ class Recursos:
                 escolhe(parte.get("apply"))
         return saida
 
-    # ---- modelos ----
     def _modelo_achatado(self, ref):
         ns, p = _ns(ref)
         chave = "%s:%s" % (ns, p)
@@ -607,7 +555,7 @@ class Recursos:
             try:
                 f = [float(v) for v in el["from"]]
                 t = [float(v) for v in el["to"]]
-            except Exception:
+            except (KeyError, TypeError, ValueError):
                 continue
             rot_el = el.get("rotation") if isinstance(el.get("rotation"), dict) else None
             sombra = 1 if el.get("shade", True) else 0
@@ -655,10 +603,8 @@ class Recursos:
         el = [{"from": [0, 0, 0], "to": [16, 16, 16], "faces": faces}]
         return self._quads(el, {"a": tid}, 0, 0, False)
 
-    # ---- texturas ----
     @staticmethod
     def _primeiro_quadro(arr, meta):
-        """Textura animada (tem .mcmeta): fica só com o quadro certo da tira. Sem .mcmeta, a imagem inteira."""
         if meta is None:
             return arr
         h, w = arr.shape[:2]
@@ -675,7 +621,7 @@ class Recursos:
             if fr:
                 f0 = fr[0]
                 quadro = int(f0["index"] if isinstance(f0, dict) else f0)
-        except Exception:
+        except ValueError:
             pass
         if fw <= 0 or fh <= 0 or fw > w or fh > h:
             return arr
@@ -685,12 +631,11 @@ class Recursos:
             r, c = 0, 0
         return arr[r * fh:(r + 1) * fh, c * fw:(c + 1) * fw]
 
-    animar = True        # guarda os quadros das texturas animadas (água, lava, fogo...) no arquivo
-    MAX_QUADROS = 10 ** 9   # sem limite de quadros
+    animar = True
+    MAX_QUADROS = 10 ** 9
     MAX_PASSOS = 10 ** 9
 
     def animacao(self, tid):
-        """Texturas com .mcmeta de animação: devolve {"quadros": {indice: RGBA}, "seq": [(indice, ticks)]} ou None."""
         cache = self.__dict__.setdefault("_anim", {})
         if tid in cache:
             return cache[tid]
@@ -730,7 +675,7 @@ class Recursos:
                             seq = [(i, base) for i in range(total)]
                         seq = [(i, t) for i, t in seq if 0 <= i < total]
                         usados = sorted({i for i, _ in seq})
-                        if len(usados) > self.MAX_QUADROS:                 # sobra quadro: fica com os mais espaçados
+                        if len(usados) > self.MAX_QUADROS:
                             passo = len(usados) / float(self.MAX_QUADROS)
                             manter = [usados[int(k * passo)] for k in range(self.MAX_QUADROS)]
                             mapa = {u: min(manter, key=lambda m: abs(m - u)) for u in usados}
@@ -748,7 +693,6 @@ class Recursos:
         return res
 
     def textura(self, tid):
-        """Imagem RGBA (numpy uint8) da textura, primeiro quadro se animada."""
         if tid in self._tex:
             return self._tex[tid]
         arr = None
@@ -759,7 +703,7 @@ class Recursos:
                 ok = arr[:, :, 3] >= 128
                 if ok.any():
                     media = arr[:, :, :3][ok].astype(np.float32).mean(axis=0)
-                    arr[~ok, :3] = (media * 0.45).round().astype(np.uint8)   # buracos viram um tom escuro da folha
+                    arr[~ok, :3] = (media * 0.45).round().astype(np.uint8)
                 arr[:, :, 3] = 255
             self._tex[tid] = arr
             return arr
@@ -805,7 +749,7 @@ class Recursos:
         self._tex[tid] = arr
         return arr
 
-    folhas_opacas = True   # folhas sem buracos (como o "gráficos rápidos" do jogo): fica limpo de longe e esconde o que há dentro da copa
+    folhas_opacas = True
 
     def _preparar_pixels(self, tid, arr):
         al = arr[:, :, 3]
@@ -814,7 +758,6 @@ class Recursos:
             return arr
         arr = arr.copy()
         media = arr[:, :, :3][opacos].astype(np.float32).mean(axis=0)
-        # pixels transparentes recebem a cor média, para não escurecer as bordas quando a textura é reduzida
         arr[al < 128, :3] = media.round().astype(np.uint8)
         return arr
 
@@ -826,18 +769,11 @@ class Recursos:
                 r = (True, False)
             else:
                 al = a[:, :, 3]
-                # (totalmente opaca, mais de um quarto dos pixels semitransparentes)
                 r = (bool((al == 255).all()), bool(((al > 0) & (al < 255)).mean() > 0.25))
             self._alfa_cache[tid] = r
         return r
 
 
-
-    # ---- quadro-negro do Supplementaries (pixels vêm do bloco-entidade) ----
-    # Formato lido do código do mod (BlackboardBlockTile / BlackboardManager):
-    #   NBT "Pixels" = long[16]; pixels[x][y] = (longs[x] >> 4*y) & 15
-    #   cor: 0 e 1 = branco, 15 = laranja, demais = DyeColor.byId(n); textura = metade esquerda (fundo) ou direita (giz)
-    #   de blackboard.png (32x16) multiplicada pela cor.
     CORES_DYE = [(0xFF, 0xFF, 0xFF), (0xD8, 0x7F, 0x33), (0xB2, 0x4C, 0xD8), (0x66, 0x99, 0xD8), (0xE5, 0xE5, 0x33),
                  (0x7F, 0xCC, 0x19), (0xF2, 0x7F, 0xA5), (0x4C, 0x4C, 0x4C), (0x99, 0x99, 0x99), (0x4C, 0x7F, 0x99),
                  (0x7F, 0x3F, 0xB2), (0x33, 0x4C, 0xB2), (0x66, 0x4C, 0x33), (0x66, 0x7F, 0x33), (0x99, 0x33, 0x33),
@@ -850,11 +786,10 @@ class Recursos:
         try:
             from PIL import Image
             return np.array(Image.open(io.BytesIO(d)).convert("RGBA"))
-        except Exception:
+        except ImportError:
             return None
 
     def info_quadro(self, nome, props, pixels):
-        """pixels: lista 16x16 indexada [x][y] com números 0..15 (ou None = quadro em branco)."""
         sprite = self._png_bruto("assets/supplementaries/textures/block/blackboard.png")
         img = np.zeros((16, 16, 4), np.uint8)
         img[:, :, 3] = 255
@@ -884,7 +819,7 @@ class Recursos:
         tex = dict(m["texturas"])
         tex["2"] = tid
         elementos = copy.deepcopy(m["elementos"]) if m["elementos"] else []
-        for el in elementos:                      # o modelo só mostra metade da textura; o jogo desenha os 16x16 inteiros
+        for el in elementos:
             for fc in (el.get("faces") or {}).values():
                 if fc.get("texture") == "#2":
                     fc["uv"] = [0, 0, 16, 16]
@@ -899,10 +834,8 @@ class Recursos:
         self._infos[chave] = r
         return r
 
-    # ---- blocos que copiam o material de outro bloco (Create Copycats, Copycats+) ----
     @staticmethod
     def _lado(d, e):
-        """Caixa fina encostada na face d (north/south/west/east/up/down) com espessura e."""
         f, t = [0, 0, 0], [16, 16, 16]
         eixo, fim = {"north": (2, 0), "south": (2, 1), "west": (0, 0), "east": (0, 1), "down": (1, 0), "up": (1, 1)}.get(d, (2, 0))
         if fim:
@@ -914,8 +847,6 @@ class Recursos:
     OPOSTA = {"north": "south", "south": "north", "west": "east", "east": "west", "up": "down", "down": "up"}
 
     def _caixas_copycat(self, nome, pr):
-        """Lista de (de, até, parte). 'parte' diz qual material do bloco vale para a caixa (None = o principal).
-        As formas vêm do CCShapes do mod Copycats+ (aproximadas quando há muitas combinações)."""
         tipo = nome.split(":", 1)[-1].replace("copycat_", "")
         facing = pr.get("facing", "north")
         meia = pr.get("half") or "bottom"
@@ -942,7 +873,6 @@ class Recursos:
             f, t = self._lado(self.OPOSTA.get(pr.get("facing", "up"), "down"), 2 * n)
             return [(f, t, None)]
         def canto(w, h, y0):
-            """Coluna/cubo no canto da face 'facing' (medidas do CCShapes: padrão voltado ao sul, girado depois)."""
             xp = facing in ("south", "east")
             zp = facing in ("south", "west")
             fx = 16 - w if xp else 0
@@ -996,7 +926,6 @@ class Recursos:
         if tipo in ("panel", "half_panel", "door", "folding_door", "sliding_door", "iron_door", "stone_button",
                     "wooden_button", "flat_pane", "trapdoor", "iron_trapdoor"):
             if tipo == "panel" and nome.startswith("create:"):
-                # Create 6.0.x: CASING_3PX, 3 px, do lado oposto ao 'facing' (como a face em que se clicou)
                 f, t = self._lado(self.OPOSTA.get(facing, "south"), 3)
                 return [(f, t, None)]
             f, t = self._lado(facing, 1 if tipo == "panel" else 3)
@@ -1014,7 +943,6 @@ class Recursos:
         return [cheio + (None,)]
 
     def _caras_material(self, mat, mprops):
-        """Texturas do material por face (lista de camadas), a partir do modelo dele."""
         minfo = self.info_bloco(mat, mprops)
         por_face = {n: [] for n in FACES}
         for tid, tint, cull, sombra, verts, uvs in minfo["quads"]:
@@ -1027,7 +955,6 @@ class Recursos:
         return por_face, todas
 
     def info_copycat(self, base, bprops, mats):
-        """mats: dict parte -> (nome_do_material, props). A parte '' (ou a primeira) vale como material principal."""
         chave = ("cc", base, tuple(sorted(bprops.items())), tuple(sorted((k, v[0], tuple(sorted(v[1].items()))) for k, v in mats.items())))
         r = self._infos.get(chave)
         if r is not None:
@@ -1067,14 +994,11 @@ class Recursos:
         return r
 
 
-
     def overlays(self):
-        """Regras method=overlay do OptiFine (bordas desenhadas por cima do bloco conforme os vizinhos)."""
         self._carregar_ctm()
         return self._overlay
 
     def info_overlays(self, base, extras):
-        """Info de um bloco com as peças de overlay (lista de (regra, tiles)) por cima da face de cima."""
         regras = self.overlays()
         quads = list(base["quads"])
         tinta = base["tinta"]
@@ -1091,7 +1015,6 @@ class Recursos:
         info["quads"], info["tinta"] = quads, tinta
         return info
 
-    # ---- regras de textura do OptiFine / CTM (random, fixed) ----
     BUCKETS = 128
 
     @staticmethod
@@ -1115,7 +1038,6 @@ class Recursos:
 
     @staticmethod
     def _nome_tile(t):
-        """'grass_block_top' / 'block/grass_block_top' / 'minecraft:block/x' -> 'minecraft:block/x'."""
         t = t.strip()
         if t.endswith(".png"):
             t = t[:-4]
@@ -1241,7 +1163,6 @@ class Recursos:
         return None
 
     def _ctm_quads(self, nome, props, quads, bucket):
-        """Troca texturas segundo as regras random/fixed. bucket=None só detecta; devolve (quads, usou)."""
         if not self._carregar_ctm():
             return quads, False
         novos, usou = [], False
@@ -1269,13 +1190,12 @@ class Recursos:
             novos.append((r["tiles"][i], tint, cull, sombra, verts, uvs))
         return novos, usou
 
-    # ---- informações completas de um tipo de bloco ----
     def info_bloco(self, nome, props, bucket=None):
         chave = (nome, tuple(sorted(props.items())), bucket)
         r = self._infos.get(chave)
         if r is not None:
             return r
-        quads, fallback, alea = None, None, False   # fallback: None ou o motivo de ter virado cubo
+        quads, fallback, alea = None, None, False
         if nome in ("minecraft:water", "minecraft:lava"):
             quads = self._quads_fluido(nome)
         else:
@@ -1290,7 +1210,6 @@ class Recursos:
                 if not quads:
                     quads = None
                     fallback = "modelo especial, sem geometria no arquivo (carregador do mod, baú, cama...)"
-                    # cubo com a textura de partícula do modelo
                     m = self._modelo_achatado(vars_[0][0])
                     tid = self._tex_ref(m["texturas"], "#particle")
                     if tid is None:
@@ -1316,7 +1235,6 @@ class Recursos:
 
     @staticmethod
     def _face_opaca(q):
-        """Folhas: as faces do cubo ficam sem buracos; os planos extras do pack (folhas 'bushy') continuam vazados."""
         tid, tint, cull, sombra, verts, uvs = q
         if tid.startswith("cor:") or tid.endswith("#opaca"):
             return q
@@ -1472,8 +1390,6 @@ def _redimensionar(a, th, tw):
 
 
 def montar_atlas(recursos, tids, tile_max=256, animar=None):
-    """Junta as texturas numa imagem só, cada uma no tamanho próprio (potência de 2, de 16 até tile_max).
-    Devolve (png, info, falhas). info["rects"][i] = [x, y, largura, altura] em pixels."""
     arrs, falhas = [], []
     for t in tids:
         a = recursos.textura(t)
@@ -1483,7 +1399,6 @@ def montar_atlas(recursos, tids, tile_max=256, animar=None):
         arrs.append(a)
     if not arrs:
         arrs = [recursos.textura("minecraft:missing")]
-    # texturas animadas: os demais quadros viram retângulos extras do atlas (depois das texturas normais)
     if animar is None:
         animar = getattr(recursos, "animar", True)
     anims, extra_de = [], []
@@ -1495,7 +1410,7 @@ def montar_atlas(recursos, tids, tile_max=256, animar=None):
             seq = an["seq"]
             quad_idx = {}
             primeiro = seq[0][0]
-            quad_idx[primeiro] = i                        # o quadro inicial já é a própria textura
+            quad_idx[primeiro] = i
             for k in sorted(an["quadros"]):
                 if k not in quad_idx:
                     quad_idx[k] = len(arrs)
@@ -1512,12 +1427,11 @@ def montar_atlas(recursos, tids, tile_max=256, animar=None):
                 anims.append({"tx": i, "dt": g, "f": passos})
     AW, AH_MAX = 4096, 8192
     cap = max(16, tile_max)
-    capx = cap          # tamanho máximo dos quadros extras de animação (encolhem antes das texturas normais)
+    capx = cap
     while True:
         tam = [(_pot2(min(a.shape[0], cap)), _pot2(min(a.shape[1], cap))) for a in arrs]
-        for k, i0 in enumerate(extra_de):              # quadros extras têm o mesmo tamanho da textura de base
+        for k, i0 in enumerate(extra_de):
             tam[len(tids) + k] = (min(tam[i0][0], capx), min(tam[i0][1], capx))
-        # empacota em prateleiras, das mais altas para as mais baixas
         ordem = sorted(range(len(arrs)), key=lambda i: (-tam[i][0], -tam[i][1]))
         rects = [None] * len(arrs)
         x = y = lin_h = 0
@@ -1548,7 +1462,6 @@ def montar_atlas(recursos, tids, tile_max=256, animar=None):
 
 
 class Paleta:
-    """Paleta global: cada tipo de bloco recebe um número (0 = ar)."""
 
     def __init__(self, guardar_estados=True, recursos=None):
         self.chaves = ["minecraft:air"]
@@ -1557,8 +1470,8 @@ class Paleta:
         self.partes = [None]
         self.diag = {"be": Counter(), "amostra": {}, "cc_ok": 0, "cc_sem": 0, "quadros": 0, "erros": []}
         self._var = {}
-        self.sobre = {}      # id com overlay -> (id base, ((regra, tiles), ...))
-        self.pai_var = {}    # id de variante aleatória -> id base
+        self.sobre = {}
+        self.pai_var = {}
         self._lut_ov = {}
         self.indice = {}
         self.guardar = guardar_estados
@@ -1593,7 +1506,6 @@ class Paleta:
         return i
 
     def variantes(self, base_id):
-        """Se o bloco tem regras de textura aleatória (OptiFine), lista de ids por 'sorteio' (16); senão None."""
         if base_id in self._var:
             return self._var[base_id]
         res = None
@@ -1622,7 +1534,6 @@ class Paleta:
         return res
 
     def nome_de(self, i):
-        """Nome do bloco de um id, mesmo sendo variante (aleatória, com overlay...)."""
         while i in self.sobre:
             i = self.sobre[i][0]
         while self.partes[i] is None and i in self.pai_var:
@@ -1631,7 +1542,6 @@ class Paleta:
         return p[0] if p else None
 
     def lut_overlay(self, ri):
-        """(é_alvo, é_conexão) por id, para a regra ri; cresce junto com a paleta."""
         regra = self.recursos.overlays()[ri]
         a, c = self._lut_ov.get(ri, (np.zeros(0, bool), np.zeros(0, bool)))
         n = len(self.chaves) + 1
@@ -1683,8 +1593,6 @@ class Paleta:
         return i
 
     def id_material(self, base_id, mats):
-        """Variante de um bloco 'copycat' com o(s) material(is) que ele copia (vem do bloco-entidade).
-        mats: dict parte -> {"Name":..., "Properties":...}"""
         if not self.partes[base_id] or not mats:
             return base_id
         nome_b, props_b = self.partes[base_id]
@@ -1714,9 +1622,6 @@ class Paleta:
         return i
 
 
-# --------------------------------------------------------------------------
-# Decodificação de chunks
-# --------------------------------------------------------------------------
 def desempacotar(dados, bits, quantidade):
     vpl = 64 // bits
     mask = np.uint64((1 << bits) - 1)
@@ -1728,7 +1633,6 @@ def desempacotar(dados, bits, quantidade):
 
 
 def decodificar_secao(sec):
-    """Devolve (índices[4096] ordem y,z,x, paleta) ou None."""
     bs = sec.get("block_states")
     if not bs:
         return None
@@ -1751,7 +1655,6 @@ def chunk_completo(nbt):
 
 
 def decodificar_chunk(nbt, pal, ymin, ymax, cx, cz, x1, x2, z1, z2):
-    """Array (H,16,16) uint16 com ids globais; fora da área = 0 (ar)."""
     H = ymax - ymin + 1
     arr = np.zeros((H, 16, 16), np.uint16)
     if not chunk_completo(nbt):
@@ -1800,7 +1703,7 @@ def decodificar_chunk(nbt, pal, ymin, ymax, cx, cz, x1, x2, z1, z2):
             m1 = be.get("Material")
             if isinstance(m1, dict) and isinstance(m1.get("Name"), str):
                 mats[""] = m1
-            md = be.get("material_data")          # Copycats+ (vários materiais, um por parte do bloco)
+            md = be.get("material_data")
             if isinstance(md, dict):
                 for chave_parte, item in md.items():
                     if isinstance(item, dict) and isinstance(item.get("material"), dict):
@@ -1850,8 +1753,7 @@ def decodificar_chunk(nbt, pal, ymin, ymax, cx, cz, x1, x2, z1, z2):
 _DIRS = ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))
 
 
-# peças do overlay (17 tiles do OptiFine): lado do bloco que encosta no vizinho que conecta
-_OV_BORDAS = {  # (n, s, w, e) -> tiles
+_OV_BORDAS = {
     (1, 0, 0, 0): (15,), (0, 1, 0, 0): (1,), (0, 0, 1, 0): (9,), (0, 0, 0, 1): (7,),
     (0, 1, 0, 1): (3,), (0, 1, 1, 0): (4,), (1, 0, 0, 1): (10,), (1, 0, 1, 0): (11,),
     (0, 0, 1, 1): (9, 7), (1, 1, 0, 0): (15, 1),
@@ -1874,13 +1776,11 @@ def _tiles_overlay(n, s_, w, e, nw, ne, sw, se):
 
 
 def aplicar_overlays(pal, C, viz):
-    """Troca, em C (H,16,16), os blocos que recebem borda de overlay (regras method=overlay do pack) por
-    variantes com as peças certas. viz: {(dx,dz): array do chunk vizinho ou None}."""
     regras = pal.recursos.overlays() if pal.recursos.tem_fontes else []
     if not regras:
         return
     H = C.shape[0]
-    tr = np.array(list(pal.transp) + [True], dtype=bool)         # não opaco (o último = sentinela)
+    tr = np.array(list(pal.transp) + [True], dtype=bool)
     acima = np.zeros_like(C)
     acima[:-1] = C[1:]
     yy, zz, xx = np.nonzero((C > 0) & tr[acima])
@@ -1931,8 +1831,6 @@ def aplicar_overlays(pal, C, viz):
 
 
 def cortar_casca(C, oeste, leste, norte, sul, tr_lista):
-    """Mantém só blocos com alguma face visível. C: (H,16,16).
-    Vizinhos ausentes = ar; abaixo do limite inferior = opaco."""
     H = C.shape[0]
     sentinela = len(tr_lista)
     tr = np.array(list(tr_lista) + [False], dtype=bool)
@@ -1956,8 +1854,6 @@ def cortar_casca(C, oeste, leste, norte, sul, tr_lista):
 
 
 def codificar_colunas(V):
-    """V: (H,16,16) -> (contagens[256], vazios, comprimentos, ids) por trechos
-    verticais de blocos iguais, coluna a coluna (ordem z, depois x)."""
     H = V.shape[0]
     cols = V.transpose(1, 2, 0).reshape(256, H)
     nz = cols != 0
@@ -1990,9 +1886,6 @@ def codificar_colunas(V):
             ids.astype(np.uint16))
 
 
-# --------------------------------------------------------------------------
-# Escaneamento
-# --------------------------------------------------------------------------
 def _num(v):
     v = round(float(v), 3)
     return int(v) if v == int(v) else v
@@ -2061,7 +1954,6 @@ def escanear(pasta_regioes, x1, z1, x2, z2, ymin, ymax, saida,
     ids = np.concatenate(L_ids) if L_ids else np.zeros(0, np.uint16)
     n_cols, n_runs = len(contagens), len(ids)
 
-    # Renumera a paleta: só os tipos que realmente aparecem no scan
     if progresso is not None:
         progresso(total, total, "Montando modelos e texturas")
     usados = np.unique(ids)
@@ -2121,7 +2013,6 @@ def escanear(pasta_regioes, x1, z1, x2, z2, ymin, ymax, saida,
         f.write(png)
     n_blocos = int(comps.astype(np.int64).sum())
 
-    # blocos que não tiveram modelo próprio (viraram cubo), agrupados por nome
     sem_modelo = {}
     if recursos.tem_fontes:
         for velho in usados:
@@ -2171,8 +2062,6 @@ def escanear(pasta_regioes, x1, z1, x2, z2, ymin, ymax, saida,
 
 
 def ler_mcscan(caminho):
-    """Leitor em Python (usado nos testes). Devolve (cabecalho, lista de
-    trechos (x, y, z, id, comprimento))."""
     with open(caminho, "rb") as f:
         dados = f.read()
     if dados[:4] != MAGIA or dados[4] != VERSAO_FORMATO:
@@ -2202,9 +2091,6 @@ def ler_mcscan(caminho):
     return cab, trechos, atlas_png
 
 
-# --------------------------------------------------------------------------
-# Visão geral (mapa de cima para escolher a área)
-# --------------------------------------------------------------------------
 _CORES_COR = {
     "white": (235, 235, 235), "orange": (216, 127, 51), "magenta": (178, 76, 216),
     "light_blue": (102, 153, 216), "yellow": (229, 229, 51), "lime": (127, 204, 25),
@@ -2262,7 +2148,6 @@ def listar_regioes(pasta):
 
 
 def gerar_visao(pasta, progresso=None, cancelar=None):
-    """Imagem de cima do mundo: amostras de cor por chunk + altura do topo."""
     regs = listar_regioes(pasta)
     if not regs:
         raise ValueError("Nenhum arquivo de região (.mca) encontrado.")
@@ -2279,7 +2164,7 @@ def gerar_visao(pasta, progresso=None, cancelar=None):
     rgb = np.empty((h, w, 3), np.uint8)
     rgb[:] = (28, 28, 32)
     topo = np.full((h, w), -9999, np.int16)
-    topo_max = np.full((h, w), -9999, np.int16)  # ponto mais alto do chunk inteiro (para sugerir o Y máx.)
+    topo_max = np.full((h, w), -9999, np.int16)
     nome_idx = np.full((h, w), -1, np.int32)
     nomes, nomes_ix = [], {}
     pasta_r = PastaRegioes(pasta)
@@ -2338,7 +2223,6 @@ def gerar_visao(pasta, progresso=None, cancelar=None):
                             nomes.append(nome)
                             nomes_ix[nome] = k
                         nome_idx[py, px] = k
-    # recorta para a área que realmente existe (com uma margem de 1 chunk)
     ys, xs = np.nonzero(nome_idx >= 0)
     if ys.size == 0:
         raise ValueError("Não encontrei chunks gerados nessa dimensão.")
@@ -2350,394 +2234,11 @@ def gerar_visao(pasta, progresso=None, cancelar=None):
             "topo": topo[j0:j1, i0:i1], "nome_idx": nome_idx[j0:j1, i0:i1], "nomes": nomes}
 
 
-# --------------------------------------------------------------------------
-# Janela (tkinter)
-# --------------------------------------------------------------------------
 def iniciar_janela():
-    try:
-        import mapscan_gui
-    except ImportError:
-        return iniciar_janela_antiga()
+    import mapscan_gui
     mapscan_gui.iniciar()
 
 
-def iniciar_janela_antiga():
-    import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox
-
-    class App(tk.Tk):
-        def __init__(self):
-            super().__init__()
-            self.title("Scap")
-            self.geometry("1100x780")
-            self.minsize(900, 600)
-            self.dims = []
-            self.visao = None
-            self.img_base = None
-            self.img_zoom = None
-            self.zoom = 2
-            self.sel = None  # (x1, z1, x2, z2) em blocos
-            self.arrasto = None
-            self.fila = queue.Queue()
-            self.cancelar = threading.Event()
-            self.ocupado = False
-            self._montar()
-            self.after(100, self._ler_fila)
-
-        # ---------- interface ----------
-        def _montar(self):
-            topo = ttk.Frame(self, padding=6)
-            topo.pack(fill="x")
-            ttk.Button(topo, text="1) Escolher pasta do mundo…", command=self.escolher).pack(side="left")
-            self.lbl_mundo = ttk.Label(topo, text="(nenhuma pasta escolhida)")
-            self.lbl_mundo.pack(side="left", padx=8)
-            self.combo = ttk.Combobox(topo, state="readonly", width=22, values=[])
-            self.combo.pack(side="left", padx=4)
-            ttk.Button(topo, text="2) Carregar mapa de cima", command=self.carregar_visao).pack(side="left", padx=4)
-
-            meio = ttk.Frame(self)
-            meio.pack(fill="both", expand=True)
-            self.canvas = tk.Canvas(meio, bg="#1c1c20", highlightthickness=0, cursor="crosshair")
-            sx = ttk.Scrollbar(meio, orient="horizontal", command=self.canvas.xview)
-            sy = ttk.Scrollbar(meio, orient="vertical", command=self.canvas.yview)
-            self.canvas.configure(xscrollcommand=sx.set, yscrollcommand=sy.set)
-            sy.pack(side="right", fill="y")
-            sx.pack(side="bottom", fill="x")
-            self.canvas.pack(side="left", fill="both", expand=True)
-            self.canvas.bind("<ButtonPress-1>", self._ini_sel)
-            self.canvas.bind("<B1-Motion>", self._mov_sel)
-            self.canvas.bind("<ButtonRelease-1>", self._fim_sel)
-            self.canvas.bind("<Motion>", self._hover)
-            self.canvas.bind("<MouseWheel>", self._roda)
-            self.canvas.bind("<Button-4>", lambda e: self._muda_zoom(+1))
-            self.canvas.bind("<Button-5>", lambda e: self._muda_zoom(-1))
-            for b in ("2", "3"):
-                self.canvas.bind("<ButtonPress-" + b + ">", lambda e: self.canvas.scan_mark(e.x, e.y))
-                self.canvas.bind("<B" + b + "-Motion>", lambda e: self.canvas.scan_dragto(e.x, e.y, gain=1))
-
-            rec = ttk.LabelFrame(self, text="Texturas", padding=6)
-            rec.pack(fill="x", padx=6)
-            self.var_tex = tk.BooleanVar(value=True)
-            ttk.Checkbutton(rec, text="Usar texturas do jogo e dos mods", variable=self.var_tex).grid(
-                row=0, column=0, columnspan=3, sticky="w")
-            self.v_jar, self.v_mods, self.v_packs = tk.StringVar(), tk.StringVar(), tk.StringVar()
-            ttk.Label(rec, text="Jar do Minecraft:").grid(row=1, column=0, sticky="w")
-            ttk.Entry(rec, textvariable=self.v_jar).grid(row=1, column=1, sticky="we", padx=4)
-            ttk.Button(rec, text="Procurar…", command=self._pick_jar).grid(row=1, column=2)
-            ttk.Label(rec, text="Pasta de mods:").grid(row=2, column=0, sticky="w")
-            ttk.Entry(rec, textvariable=self.v_mods).grid(row=2, column=1, sticky="we", padx=4)
-            ttk.Button(rec, text="Procurar…", command=self._pick_mods).grid(row=2, column=2)
-            ttk.Label(rec, text="Resource packs (opcional):").grid(row=3, column=0, sticky="w")
-            ttk.Entry(rec, textvariable=self.v_packs).grid(row=3, column=1, sticky="we", padx=4)
-            ttk.Button(rec, text="Adicionar…", command=self._pick_packs).grid(row=3, column=2)
-            rec.columnconfigure(1, weight=1)
-
-            base = ttk.Frame(self, padding=6)
-            base.pack(fill="x")
-            self.v = {k: tk.StringVar() for k in ("x1", "z1", "x2", "z2", "ymin", "ymax")}
-            for rot, k in (("X1", "x1"), ("Z1", "z1"), ("X2", "x2"), ("Z2", "z2"),
-                           ("Y mín.", "ymin"), ("Y máx.", "ymax")):
-                ttk.Label(base, text=rot).pack(side="left", padx=(8, 2))
-                e = ttk.Entry(base, textvariable=self.v[k], width=7)
-                e.pack(side="left")
-                e.bind("<Return>", lambda ev: self._desenha_sel_de_campos())
-                e.bind("<FocusOut>", lambda ev: self._desenha_sel_de_campos())
-            self.var_estados = tk.BooleanVar(value=True)
-            ttk.Checkbutton(base, text="Guardar estados dos blocos (escadas, lajes, portas)",
-                            variable=self.var_estados).pack(side="left", padx=12)
-
-            acoes = ttk.Frame(self, padding=(6, 0, 6, 6))
-            acoes.pack(fill="x")
-            self.btn_scan = ttk.Button(acoes, text="3) Escanear área selecionada", command=self.escanear)
-            self.btn_scan.pack(side="left")
-            self.btn_cancel = ttk.Button(acoes, text="Cancelar", command=self.cancelar.set, state="disabled")
-            self.btn_cancel.pack(side="left", padx=6)
-            self.barra = ttk.Progressbar(acoes, mode="determinate", length=260)
-            self.barra.pack(side="left", padx=8)
-            self.lbl_status = ttk.Label(acoes, text="Escolha a pasta do mundo para começar.", wraplength=620)
-            self.lbl_status.pack(side="left", padx=8)
-            self.lbl_hover = ttk.Label(self, text="", padding=(8, 0, 8, 6))
-            self.lbl_hover.pack(fill="x")
-
-        # ---------- ações ----------
-        def escolher(self):
-            pasta = filedialog.askdirectory(title="Pasta do mundo (a que contém a pasta region)")
-            if not pasta:
-                return
-            self.dims = achar_dimensoes(pasta)
-            if not self.dims:
-                messagebox.showerror("Scap", "Não encontrei a pasta 'region' nessa pasta.")
-                return
-            self.lbl_mundo.config(text=pasta if len(pasta) <= 48 else "…" + pasta[-47:])
-            self.combo.config(values=[d[0] for d in self.dims])
-            self.combo.current(0)
-            self.v_jar.set(achar_jar_minecraft(pasta) or "")
-            self.v_mods.set(achar_pasta_mods(pasta) or "")
-            falta = []
-            if not self.v_jar.get():
-                falta.append("o jar do Minecraft")
-            if not self.v_mods.get():
-                falta.append("a pasta de mods")
-            self.status("Pasta carregada. " + ("Não achei %s: indique em Texturas. " % " e ".join(falta) if falta else "")
-                        + "Clique em \"Carregar mapa de cima\".")
-
-        def _pick_jar(self):
-            c = filedialog.askopenfilename(title="Jar do Minecraft (ex.: versions/1.20.1/1.20.1.jar)",
-                                           filetypes=[("Jar", "*.jar"), ("Todos", "*.*")])
-            if c:
-                self.v_jar.set(c)
-
-        def _pick_mods(self):
-            c = filedialog.askdirectory(title="Pasta de mods (a que contém os .jar dos mods)")
-            if c:
-                self.v_mods.set(c)
-
-        def _pick_packs(self):
-            cs = filedialog.askopenfilenames(title="Resource packs (.zip)", filetypes=[("Zip", "*.zip"), ("Todos", "*.*")])
-            if cs:
-                atual = [p for p in self.v_packs.get().split(";") if p.strip()]
-                self.v_packs.set(";".join(atual + list(cs)))
-
-        def status(self, texto):
-            self.lbl_status.config(text=texto)
-
-        def _bloquear(self, sim):
-            self.ocupado = sim
-            self.btn_scan.config(state="disabled" if sim else "normal")
-            self.btn_cancel.config(state="normal" if sim else "disabled")
-
-        def carregar_visao(self):
-            if self.ocupado:
-                return
-            i = self.combo.current()
-            if i < 0:
-                messagebox.showinfo("Scap", "Escolha a pasta do mundo primeiro.")
-                return
-            pasta = self.dims[i][1]
-            self.cancelar.clear()
-            self._bloquear(True)
-
-            def trabalho():
-                try:
-                    vis = gerar_visao(pasta, lambda a, b, m: self.fila.put(("prog", a, b, m)), self.cancelar)
-                    self.fila.put(("visao", vis))
-                except Cancelado:
-                    self.fila.put(("msg", "Cancelado."))
-                except Exception as e:  # noqa
-                    self.fila.put(("erro", str(e)))
-            threading.Thread(target=trabalho, daemon=True).start()
-
-        def escanear(self):
-            if self.ocupado or not self.dims:
-                return
-            try:
-                x1, z1, x2, z2, ymin, ymax = [int(self.v[k].get()) for k in ("x1", "z1", "x2", "z2", "ymin", "ymax")]
-            except ValueError:
-                messagebox.showinfo("Scap", "Selecione a área no mapa (ou preencha X1, Z1, X2, Z2, Y mín. e Y máx.).")
-                return
-            saida = filedialog.asksaveasfilename(title="Salvar scan como", defaultextension=".scap",
-                                                 initialfile="cidade.scap",
-                                                 filetypes=[("Scan 3D", "*.scap")])
-            if not saida:
-                return
-            i = max(self.combo.current(), 0)
-            nome_dim, pasta = self.dims[i]
-            estados = self.var_estados.get()
-            usar_tex = self.var_tex.get()
-            jar, mods = self.v_jar.get().strip(), self.v_mods.get().strip()
-            packs = [p.strip() for p in self.v_packs.get().split(";") if p.strip()]
-            if usar_tex and not jar:
-                if not messagebox.askyesno("Scap", "Sem o jar do Minecraft, os blocos do jogo ficam sem textura "
-                                           "(só os mods terão). Continuar assim?"):
-                    return
-            self.cancelar.clear()
-            self._bloquear(True)
-
-            def trabalho():
-                try:
-                    rec = None
-                    if usar_tex:
-                        self.fila.put(("prog", 0, 1, "Lendo os jars do Minecraft e dos mods…"))
-                        rec = Recursos(jar or None, mods or None, packs, [])
-                        if not rec.tem_fontes:
-                            raise ValueError("Não encontrei nenhuma textura. Confira o jar do Minecraft e a pasta de mods, "
-                                             "ou desmarque \"Usar texturas\".")
-                    r = escanear(pasta, x1, z1, x2, z2, ymin, ymax, saida, estados, nome_dim,
-                                 lambda a, b, m: self.fila.put(("prog", a, b, m)), self.cancelar, rec)
-                    self.fila.put(("fim", r))
-                except Cancelado:
-                    self.fila.put(("msg", "Cancelado."))
-                except Exception as e:  # noqa
-                    self.fila.put(("erro", str(e)))
-            threading.Thread(target=trabalho, daemon=True).start()
-
-        def _ler_fila(self):
-            try:
-                while True:
-                    m = self.fila.get_nowait()
-                    if m[0] == "prog":
-                        self.barra.config(maximum=max(m[2], 1), value=m[1])
-                        self.status(m[3])
-                    elif m[0] == "visao":
-                        self.visao = m[1]
-                        self._bloquear(False)
-                        self._criar_imagem()
-                        self.status("Arraste com o botão esquerdo para selecionar a cidade. Botão direito move, roda do mouse dá zoom.")
-                    elif m[0] == "fim":
-                        self._bloquear(False)
-                        r = m[1]
-                        mb = r["bytes"] / 1048576
-                        self.status("Pronto: %s (%.2f MB, %d blocos, %d tipos)" % (
-                            os.path.basename(r["arquivo"]), mb, r["blocos"], r["tipos"]))
-                        extra = ""
-                        if r["texturas_faltando"]:
-                            extra += "\nTexturas não encontradas: %d (aparecem em magenta). Exemplos: %s" % (
-                                len(r["texturas_faltando"]), ", ".join(r["texturas_faltando"][:5]))
-                        if r["sem_modelo"]:
-                            extra += "\nBlocos sem modelo próprio (viraram cubo): %d tipo(s). Exemplos: %s" % (
-                                len(r["sem_modelo"]), ", ".join(n for n, _, _ in r["sem_modelo"][:5]))
-                        if r["relatorio"]:
-                            extra += "\nLista completa em: " + r["relatorio"]
-                        if r["avisos"]:
-                            extra += "\nAvisos: " + "; ".join(r["avisos"][:3])
-                        messagebox.showinfo("Scap", "Scan salvo em:\n%s\n\nTamanho: %.2f MB (texturas: %.2f MB)\nBlocos guardados: %d\nTipos de bloco: %d\nTexturas: %d%s" % (
-                            r["arquivo"], mb, r["bytes_atlas"] / 1048576, r["blocos"], r["tipos"], r["texturas"], extra))
-                    elif m[0] == "msg":
-                        self._bloquear(False)
-                        self.status(m[1])
-                    elif m[0] == "erro":
-                        self._bloquear(False)
-                        self.status("Erro: " + m[1])
-                        messagebox.showerror("Scap", m[1])
-            except queue.Empty:
-                pass
-            self.after(100, self._ler_fila)
-
-        # ---------- mapa ----------
-        def _criar_imagem(self):
-            vis = self.visao
-            h, w = vis["h"], vis["w"]
-            ppm = b"P6\n%d %d\n255\n" % (w, h) + vis["rgb"].tobytes()
-            self.img_base = tk.PhotoImage(data=ppm, format="PPM")
-            self.sel = None
-            self.update_idletasks()
-            cw, ch = max(self.canvas.winfo_width(), 200), max(self.canvas.winfo_height(), 200)
-            self.zoom = max(1, int(round(min(cw / w, ch / h))))  # começa enquadrando o mundo inteiro
-            self._redesenhar()
-
-        def _zoom_max(self):
-            maior = max(self.visao["w"], self.visao["h"])
-            return max(1, min(8, 6000 // max(maior, 1)))
-
-        def _redesenhar(self):
-            if self.img_base is None:
-                return
-            self.zoom = max(1, min(self.zoom, self._zoom_max()))
-            self.img_zoom = self.img_base.zoom(self.zoom) if self.zoom > 1 else self.img_base
-            self.canvas.delete("all")
-            self.canvas.create_image(0, 0, anchor="nw", image=self.img_zoom)
-            self.canvas.configure(scrollregion=(0, 0, self.img_zoom.width(), self.img_zoom.height()))
-            self._desenha_sel()
-
-        def _roda(self, e):
-            self._muda_zoom(1 if e.delta > 0 else -1)
-
-        def _muda_zoom(self, d):
-            if self.img_base is None:
-                return
-            novo = max(1, min(self._zoom_max(), self.zoom + d))
-            if novo != self.zoom:
-                self.zoom = novo
-                self._redesenhar()
-
-        def _para_bloco(self, e):
-            vis = self.visao
-            px = self.canvas.canvasx(e.x) / self.zoom
-            pz = self.canvas.canvasy(e.y) / self.zoom
-            f = 16 / vis["res"]
-            return int(vis["x0"] + px * f), int(vis["z0"] + pz * f)
-
-        def _de_bloco(self, x, z):
-            vis = self.visao
-            f = 16 / vis["res"]
-            return (x - vis["x0"]) / f * self.zoom, (z - vis["z0"]) / f * self.zoom
-
-        def _ini_sel(self, e):
-            if self.visao is None:
-                return
-            self.arrasto = self._para_bloco(e)
-
-        def _mov_sel(self, e):
-            if self.arrasto is None:
-                return
-            bx, bz = self._para_bloco(e)
-            ax, az = self.arrasto
-            self.sel = (min(ax, bx), min(az, bz), max(ax, bx), max(az, bz))
-            self._desenha_sel()
-            self._preencher_campos(sugerir=False)
-
-        def _fim_sel(self, e):
-            if self.arrasto is None:
-                return
-            self.arrasto = None
-            if self.sel and self.sel[2] > self.sel[0] and self.sel[3] > self.sel[1]:
-                self._preencher_campos(sugerir=True)
-
-        def _desenha_sel(self):
-            self.canvas.delete("sel")
-            if not self.sel or self.visao is None:
-                return
-            x1, z1, x2, z2 = self.sel
-            a, b = self._de_bloco(x1, z1)
-            c, d = self._de_bloco(x2 + 1, z2 + 1)
-            self.canvas.create_rectangle(a, b, c, d, outline="#ffd400", width=2, tags="sel")
-
-        def _preencher_campos(self, sugerir):
-            x1, z1, x2, z2 = self.sel
-            for k, val in (("x1", x1), ("z1", z1), ("x2", x2), ("z2", z2)):
-                self.v[k].set(str(val))
-            if sugerir and self.visao is not None:
-                vis = self.visao
-                f = 16 / vis["res"]
-                i0, i1 = int((x1 - vis["x0"]) / f), int((x2 - vis["x0"]) / f) + 1
-                j0, j1 = int((z1 - vis["z0"]) / f), int((z2 - vis["z0"]) / f) + 1
-                sub = vis["topo"][max(j0, 0):j1, max(i0, 0):i1]
-                sub = sub[sub > -9000]
-                alto = vis["topo_max"][max(j0, 0):j1, max(i0, 0):i1]
-                alto = alto[alto > -9000]
-                if sub.size:
-                    chao = int(np.percentile(sub, 10))
-                    self.v["ymin"].set(str(chao - 3))
-                    self.v["ymax"].set(str(int(max(sub.max(), alto.max() if alto.size else sub.max())) + 2))
-                    self.status("Altura sugerida: do chão - 3 até o ponto mais alto da área. "
-                                "Se a cidade tem porões mais fundos, diminua o Y mín.")
-
-        def _desenha_sel_de_campos(self):
-            try:
-                x1, z1, x2, z2 = [int(self.v[k].get()) for k in ("x1", "z1", "x2", "z2")]
-            except ValueError:
-                return
-            self.sel = (min(x1, x2), min(z1, z2), max(x1, x2), max(z1, z2))
-            self._desenha_sel()
-
-        def _hover(self, e):
-            if self.visao is None:
-                return
-            vis = self.visao
-            bx, bz = self._para_bloco(e)
-            f = 16 / vis["res"]
-            i, j = int((bx - vis["x0"]) / f), int((bz - vis["z0"]) / f)
-            info = ""
-            if 0 <= i < vis["w"] and 0 <= j < vis["h"] and vis["topo"][j, i] > -9000:
-                info = "  |  topo y=%d  |  %s" % (vis["topo"][j, i], vis["nomes"][vis["nome_idx"][j, i]])
-            self.lbl_hover.config(text="X=%d  Z=%d%s" % (bx, bz, info))
-
-    App().mainloop()
-
-
-# --------------------------------------------------------------------------
-# Linha de comando
-# --------------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(description="Scap")
     ap.add_argument("--mundo", help="pasta do mundo (a que contém 'region')")
