@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="Scan/gui_assets/emblema.png" width="120" alt="Scap">
+<img src="docs/emblema.png" width="120" alt="Scap">
 
 # Scap
 
