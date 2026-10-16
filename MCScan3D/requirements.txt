@@ -1,5 +1,0 @@
-numpy
-pillow
-pywebview
-pythonnet
-pyinstaller
