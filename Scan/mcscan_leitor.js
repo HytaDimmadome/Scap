@@ -166,12 +166,17 @@
     return { az: LUZ.az, elev: LUZ.elev, noite: LUZ.noite, pos: LUZ.pos };
   }
   function sol(sx, sz) {
-    var SOL_AZ = LUZ.az * Math.PI / 180, SOL_ELEV = LUZ.elev * Math.PI / 180;
+    var elevG = LUZ.pos ? 24 : 27;   // nascer e pôr do sol: sol baixo, sombras longas
+    var SOL_AZ = LUZ.az * Math.PI / 180, SOL_ELEV = elevG * Math.PI / 180;
     var k = Math.SQRT1_2, bx = sx * k, bz = sz * k, rx = sz * k, rz = -sx * k;   // trás da câmera e direita da tela
     var c = Math.cos(SOL_AZ), sn = Math.sin(SOL_AZ);
     var hx = bx * c - rx * sn, hz = bz * c - rz * sn;
     var CARD = { n: [0, -1], s: [0, 1], l: [1, 0], o: [-1, 0] };      // norte = -z, sul = +z, leste = +x, oeste = -x
-    if (CARD[LUZ.pos]) { hx = CARD[LUZ.pos][0]; hz = CARD[LUZ.pos][1]; }
+    if (CARD[LUZ.pos]) {
+      // o ponto cardeal manda, mas inclina ~35 graus para o lado da câmera: assim o sol sempre bate em alguma face visível
+      var ux = CARD[LUZ.pos][0] * 0.82 + bx * 0.57, uz = CARD[LUZ.pos][1] * 0.82 + bz * 0.57, ul = Math.hypot(ux, uz);
+      hx = ux / ul; hz = uz / ul;
+    }
     var ce = Math.cos(SOL_ELEV), se = Math.sin(SOL_ELEV);
     return { hx: hx, hz: hz, lx: hx * ce, ly: se, lz: hz * ce, subida: Math.tan(SOL_ELEV) };
   }
@@ -313,16 +318,34 @@
       return claro / 3;
     }
     /* ---- noite: blocos que emitem luz e luz de bloco aproximada por vértice ---- */
-    var NOITE = LUZ.noite === 1, emNivel = new Uint8Array(pal.length), emCache = {};
+    var NOITE = LUZ.noite === 1, emNivel = new Uint8Array(pal.length), emCor = new Array(pal.length), emCache = {};
+    var ondaTipo = new Uint8Array(pal.length), ondaMeia = new Int8Array(pal.length);   // 1 = folhas, 2 = plantas, 3 = trepadeiras
     if (NOITE) {
-      var TAB = [["sea_lantern", 15], ["glowstone", 15], ["shroomlight", 15], ["jack_o_lantern", 15], ["redstone_lamp", 15], ["lava", 15],
-        ["campfire", 15], ["froglight", 15], ["beacon", 15], ["lantern", 15], ["end_rod", 14], ["torch", 14], ["fire", 15],
-        ["magma", 3], ["candle", 6], ["glow_lichen", 7], ["lit", 13], ["light_block", 15], ["crying_obsidian", 10]];
+      // [parte do nome, nível de luz, cor RGB da luz] - o primeiro que casar vale (mais específicos primeiro)
+      var QUENTE = [1.15, 0.62, 0.22], ALMA = [0.25, 0.85, 1.0];
+      var TAB = [["soul_", 14, ALMA], ["sea_lantern", 15, [0.65, 0.95, 1.1]], ["end_rod", 14, [0.95, 0.95, 1.1]], ["beacon", 15, [0.7, 1.0, 1.2]],
+        ["verdant_froglight", 15, [0.5, 1.0, 0.5]], ["pearlescent_froglight", 15, [1.0, 0.6, 1.0]], ["froglight", 15, [1.1, 0.85, 0.35]],
+        ["glowstone", 15, [1.1, 0.85, 0.4]], ["shroomlight", 15, [1.1, 0.8, 0.35]], ["jack_o_lantern", 15, [1.15, 0.65, 0.2]],
+        ["redstone_lamp", 15, [1.1, 0.7, 0.35]], ["lava", 15, [1.25, 0.5, 0.12]], ["campfire", 15, QUENTE], ["lantern", 15, [1.15, 0.65, 0.25]],
+        ["torch", 14, QUENTE], ["fire", 15, QUENTE], ["magma", 3, [1.1, 0.4, 0.1]], ["candle", 6, [1.1, 0.7, 0.3]],
+        ["glow_lichen", 7, [0.6, 1.0, 0.7]], ["light_block", 15, [1.1, 0.9, 0.6]], ["crying_obsidian", 10, [0.6, 0.25, 1.0]],
+        ["nether_portal", 11, [0.8, 0.25, 1.1]]];
       for (var pi = 0; pi < pal.length; pi++) {
         var nm = pal[pi].n || "";
-        if (nm.indexOf("[lit=false") >= 0 || nm.indexOf("unlit") >= 0 || nm.indexOf("soul_campfire") >= 0 && false) continue;
-        for (var ti = 0; ti < TAB.length; ti++) if (nm.indexOf(TAB[ti][0]) >= 0) { emNivel[pi] = TAB[ti][1]; break; }
-        if (nm.indexOf("lit=true") >= 0 && !emNivel[pi]) emNivel[pi] = 13;
+        if (nm.indexOf("[lit=false") >= 0 || nm.indexOf("unlit") >= 0) continue;
+        for (var ti = 0; ti < TAB.length; ti++) if (nm.indexOf(TAB[ti][0]) >= 0) { emNivel[pi] = TAB[ti][1]; emCor[pi] = TAB[ti][2]; break; }
+        if (nm.indexOf("lit=true") >= 0 && !emNivel[pi]) { emNivel[pi] = 13; emCor[pi] = [1.1, 0.75, 0.4]; }
+      }
+    }
+    /* vento: folhas balançam pouco, plantas balançam mais na ponta, trepadeiras inteiras */
+    for (var wi = 0; wi < pal.length; wi++) {
+      var wn = (pal[wi].n || ""), wb = wn.split("[")[0];
+      if (!wb || (pal[wi].f & F_TRANSLUC)) continue;
+      if (/leaves/.test(wb)) ondaTipo[wi] = 1;
+      else if (/vine|hanging_roots|glow_lichen/.test(wb)) ondaTipo[wi] = 3;
+      else if (/(^|[:_])(grass|fern|sapling)$|tall_grass|large_fern|flower|tulip|orchid|allium|bluet|oxeye|cornflower|lily_of_the_valley|rose_bush|peony|lilac|sunflower|dandelion|poppy|wheat|carrots|potatoes|beetroots|sugar_cane|bush|crop|plant|sprouts/.test(wb) && !/grass_block|potted|_log|_wood/.test(wb)) {
+        ondaTipo[wi] = 2;
+        ondaMeia[wi] = wn.indexOf("half=upper") >= 0 ? 1 : (wn.indexOf("half=lower") >= 0 ? -1 : 0);
       }
     }
     function emissores(i, j) {          // lâmpadas do chunk (i,j) e dos vizinhos: [x, y, z, nível] em coordenadas da área
@@ -341,7 +364,7 @@
               var x = ox + (loc & 15), y = yIni[r] + kk, z = oz + (loc >> 4);
               var h = (x >> 1) + "," + (y >> 1) + "," + (z >> 1);   // um por célula 2x2x2 (lagos de lava, etc.)
               if (visto[h]) continue;
-              visto[h] = 1; lista.push([x + 0.5, y + 0.5, z + 0.5, nv]);
+              visto[h] = 1; var ec = emCor[ids[r]] || [1.15, 0.7, 0.3]; lista.push([x + 0.5, y + 0.5, z + 0.5, nv, ec[0], ec[1], ec[2]]);
             }
           }
         }
@@ -371,7 +394,7 @@
           if (!modelo.length) continue;
           var fl = flags[id], dest = (fl & F_TRANSLUC) ? S.transl : S.opaco;
           var tint = p.t ? tintas[p.t] : null;
-          var alfa = (fl & F_AGUA) ? 178 : 255;
+          var alfa = (fl & F_AGUA) ? 178 : 255, ond = (dest === S.opaco) ? ondaTipo[id] : 0, meia = ondaMeia[id];
           for (var kk = 0, n = comps[r]; kk < n; kk++) {
             var yr = yIni[r] + kk;
             if (!semOclusao && oculto(xl, yr, zl)) continue;
@@ -415,7 +438,8 @@
                   if (NOITE) {
                     // luar azulado + luz quente das lâmpadas
                     fr *= 0.30; fg *= 0.37; fb *= 0.58;
-                    var vx = xl + q.pos[v * 3] / SUB, vy = yr + q.pos[v * 3 + 1] / SUB, vz = zl + q.pos[v * 3 + 2] / SUB, lamp = 0;
+                    var vx = xl + q.pos[v * 3] / SUB, vy = yr + q.pos[v * 3 + 1] / SUB, vz = zl + q.pos[v * 3 + 2] / SUB;
+                    var mx = 0, soma = 0, ar = 0, ag = 0, ab = 0;
                     for (var e = 0; e < nEM; e++) {
                       var E = EM[e], ex = E[0] - vx, ey = E[1] - vy, ez = E[2] - vz, dd = Math.sqrt(ex * ex + ey * ey + ez * ez);
                       var inten = (E[3] - dd) / 15;
@@ -423,25 +447,37 @@
                       var cosn = dd > 0.01 ? (q.nx * ex + q.ny * ey + q.nz * ez) / dd : 1;
                       if (cosn < -0.1) continue;
                       inten *= 0.4 + 0.6 * Math.max(0, cosn);
-                      if (inten > lamp) lamp = inten + (lamp * 0.3);
+                      if (inten > mx) mx = inten;
+                      soma += inten; ar += inten * E[4]; ag += inten * E[5]; ab += inten * E[6];
                     }
+                    var lamp = mx + 0.3 * (soma - mx), lcr = 1.15, lcg = 0.78, lcb = 0.38;
+                    if (soma > 0) { lcr = ar / soma; lcg = ag / soma; lcb = ab / soma; }
                     if (lamp > 1) lamp = 1;
-                    if (emNivel[id]) lamp = 1.6;                       // a própria lâmpada brilha
-                    fr += lamp * 1.15; fg += lamp * 0.78; fb += lamp * 0.38;
+                    if (emNivel[id]) { lamp = 1.6; var pc = emCor[id]; if (pc) { lcr = pc[0]; lcg = pc[1]; lcb = pc[2]; } }   // a própria lâmpada brilha
+                    fr += lamp * lcr; fg += lamp * lcg; fb += lamp * lcb;
                   } else {
-                    fr *= 0.56 + 0.56 * li; fg *= 0.60 + 0.41 * li; fb *= 0.76 + 0.08 * li;
+                    if (LUZ.pos === "o" || LUZ.pos === "s") { fr *= 0.50 + 0.82 * li; fg *= 0.58 + 0.40 * li; fb *= 0.80 - 0.15 * li; }   // pôr do sol: laranja dourado
+                    else if (LUZ.pos === "n" || LUZ.pos === "l") { fr *= 0.54 + 0.66 * li; fg *= 0.60 + 0.38 * li; fb *= 0.86 + 0.04 * li; }   // nascer do sol: rosa e dourado suave
+                    else { fr *= 0.51 + 0.74 * li; fg *= 0.59 + 0.42 * li; fb *= 0.82 - 0.10 * li; }   // sol de outono: dourado, na mesma família do nascer e do pôr
                   }
                 }
                 if (NOITE && dest !== S.opaco) { fr *= 0.28; fg *= 0.34; fb *= 0.55; }
-                var R8 = Math.min(255, (cr * fr * 255 + 0.5) | 0), G8 = Math.min(255, (cg * fg * 255 + 0.5) | 0), B8 = Math.min(255, (cb * fb * 255 + 0.5) | 0);
+                var A8 = 255, R8 = Math.min(255, (cr * fr * 255 + 0.5) | 0), G8 = Math.min(255, (cg * fg * 255 + 0.5) | 0), B8 = Math.min(255, (cb * fb * 255 + 0.5) | 0);
+                var ya = 1;
+                if (ond) {                                           // amplitude do vento (alfa 0..255 = 0..0.16 bloco)
+                  var hy = Math.min(1, Math.max(0, q.pos[v * 3 + 1] / SUB));
+                  ya = ond === 1 ? 1.0 : ond === 3 ? 0.5 * (1 - hy) : (meia > 0 ? 0.5 + 0.5 * hy : meia < 0 ? 0.5 * hy : hy) * 0.9;
+                  if (ond === 2 && ya < 0.02) ya = 0.0;
+                  A8 = (ya * 255 + 0.5) | 0;
+                } else A8 = alfa;
                 var o = (nv + v) * 8, ob = (nv + v) * 16 + 12;
                 u16[o] = bx + q.pos[v * 3];
                 u16[o + 1] = by + q.pos[v * 3 + 1];
                 u16[o + 2] = bz + q.pos[v * 3 + 2];
-                u16[o + 3] = q.tx;
+                u16[o + 3] = ond ? (q.tx | 32768) : q.tx;
                 u16[o + 4] = q.uv[v * 2];
                 u16[o + 5] = q.uv[v * 2 + 1];
-                u8[ob] = R8; u8[ob + 1] = G8; u8[ob + 2] = B8; u8[ob + 3] = alfa;
+                u8[ob] = R8; u8[ob + 1] = G8; u8[ob + 2] = B8; u8[ob + 3] = A8;
               }
               dest.nv = nv + 4;
             }

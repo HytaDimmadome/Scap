@@ -25,7 +25,7 @@ from mapscan_ui import (VERDE, VERDE_HOV, CREME, CREME_CLARO, CREME_ESC, BORDA, 
                         AVISO, Btn, IconBtn, Check, Painel, Campo, Dropdown, NavItem, BarraProgresso, ListaRolavel,
                         rr_img, tk_icone, fonte)
 
-VERSAO = "1.0.0 (build 15/10 21h05 - 3D encaixado)"
+VERSAO = "1.0.0 (build 16/10 00h20 - sol de outono dourado)"
 NOME = "Scap"
 
 # ---------------------------------------------------------------- configuração

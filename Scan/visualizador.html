@@ -54,14 +54,19 @@
 </div>
 <div class="luz" id="luz">
   <div class="rosa" title="De que lado vem o sol">
-    <span></span><button data-pos="n" title="Sol ao norte">N</button><span></span>
-    <button data-pos="o" title="Sol a oeste">O</button><button data-pos="" class="centro" title="Sol de outono (padrão)">☀</button><button data-pos="l" title="Sol a leste">L</button>
-    <span></span><button data-pos="s" title="Sol ao sul">S</button><span></span>
+    <span></span><button data-pos="n" title="Nascer do sol (norte)">N</button><span></span>
+    <button data-pos="o" title="Pôr do sol (oeste)">O</button><button data-pos="" class="centro" title="Sol de outono (padrão)">☀</button><button data-pos="l" title="Nascer do sol (leste)">L</button>
+    <span></span><button data-pos="s" title="Pôr do sol (sul)">S</button><span></span>
   </div>
   <div class="dn">
     <button id="btnDia" class="on">☀ Dia</button><button id="btnNoite" class="noite">🌙 Noite</button>
   </div>
-  <button id="animBtn" class="on" style="display:none" title="Água, lava, fogo e outras texturas em movimento">🌊 Animações</button>
+  <div class="dn">
+    <button id="animBtn" class="on" style="display:none" title="Água, lava, fogo e outras texturas em movimento">🌊 Animações</button>
+    <button id="fxVento" class="on" title="Folhas e plantas balançando">🍃 Vento</button>
+    <button id="fxNevoa" class="on" title="Neblina de profundidade e céu em degradê">☁ Névoa</button>
+    <button id="fxBrilho" class="on" title="Brilho das luzes à noite">✨ Brilho</button>
+  </div>
 </div>
 <div id="aviso"><div><strong id="avisoTitulo">Carregando…</strong><p id="avisoTexto"></p></div></div>
 
@@ -107,6 +112,14 @@
         var ab = document.getElementById("animBtn"); ab.style.display = ""; ab.classList.add("on");
         ab.onclick = function () { ab.classList.toggle("on", vista.animar(!vista.estado.animar)); };
       }
+      [["fxVento", ["vento"]], ["fxNevoa", ["neblina", "ceu"]], ["fxBrilho", ["brilho"]]].forEach(function (par) {
+        var bt = document.getElementById(par[0]);
+        bt.onclick = function () {
+          var lig = !bt.classList.contains("on"), c = {};
+          par[1].forEach(function (k) { c[k] = lig; });
+          vista.estilo(c); bt.classList.toggle("on", lig);
+        };
+      });
       esconder();
     } catch (e) {
       console.error(e);
